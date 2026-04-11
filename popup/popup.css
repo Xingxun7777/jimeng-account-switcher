@@ -1,0 +1,345 @@
+/* ============ 基础 ============ */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  width: 400px;
+  min-height: 200px;
+  max-height: 580px;
+  font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 13px;
+  color: #1a1a2e;
+  background: #f8f9fb;
+  overflow-y: auto;
+}
+
+.container { padding: 12px; }
+
+.hidden { display: none !important; }
+
+/* ============ 顶栏 ============ */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e8eaef;
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #16213e;
+}
+
+/* ============ 摘要栏 ============ */
+.summary-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  background: linear-gradient(135deg, #eef2ff, #f0f3ff);
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.summary-label { font-size: 10px; color: #888; }
+.summary-value { font-size: 15px; font-weight: 700; color: #4361ee; }
+
+/* ============ 按钮 ============ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn:hover { filter: brightness(0.93); }
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; transform: none; }
+
+.btn-primary { background: #4361ee; color: #fff; }
+.btn-accent  { background: #f72585; color: #fff; }
+.btn-switch  { background: #4cc9f0; color: #fff; padding: 4px 10px; }
+.btn-claim-one { background: #7209b7; color: #fff; padding: 4px 10px; }
+.btn-delete  { background: transparent; color: #999; padding: 4px 6px; }
+.btn-delete:hover { color: #e63946; background: #fee; }
+.btn-rename  { background: transparent; color: #999; padding: 4px 6px; }
+.btn-rename:hover { color: #4361ee; background: #eef; }
+.btn-outline { background: transparent; border: 1px solid #c8d0e0; color: #666; padding: 4px 10px; }
+.btn-outline:hover { border-color: #4361ee; color: #4361ee; }
+.btn-wide { width: 100%; padding: 9px 0; font-size: 13px; }
+.btn-sm { padding: 3px 8px; font-size: 11px; }
+
+/* ============ 账号列表 ============ */
+.account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 28px 16px;
+  color: #999;
+}
+.empty-state .hint { font-size: 11px; margin-top: 6px; color: #bbb; }
+
+/* ============ 账号卡片 ============ */
+.account-card {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1.5px solid #e8eaef;
+  border-radius: 10px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.account-card:hover {
+  border-color: #c8d0e0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+}
+
+.account-card.active {
+  border-color: #4361ee;
+  background: #f0f3ff;
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.account-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.account-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: #e8eaef;
+  position: relative;
+}
+
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, #4361ee, #7209b7);
+}
+
+/* Session 状态点 */
+.status-dot {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+}
+.status-dot.valid { background: #2d6a2e; }
+.status-dot.expired { background: #e63946; }
+.status-dot.unknown { background: #ccc; }
+
+.account-details {
+  min-width: 0;
+  flex: 1;
+}
+
+.account-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.account-name {
+  font-weight: 600;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.badge.current  { background: #d0f0c0; color: #2d6a2e; }
+.badge.claimed   { background: #fff3cd; color: #856404; }
+.badge.expired   { background: #fde; color: #c00; }
+.badge.vip       { background: #fff0f5; color: #d63384; }
+
+.save-time { font-size: 10px; color: #aaa; }
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+
+/* 卡片底部: 积分信息 */
+.card-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid #f0f1f5;
+}
+
+.credits-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  color: #666;
+}
+
+.credits-num {
+  font-weight: 700;
+  color: #f72585;
+  font-size: 13px;
+}
+
+.vip-tag {
+  font-size: 10px;
+  color: #d63384;
+  font-weight: 600;
+}
+
+.card-bottom-actions {
+  display: flex;
+  gap: 4px;
+}
+
+/* ============ 批量操作 ============ */
+.batch-bar { margin-bottom: 10px; }
+
+/* ============ 进度条 ============ */
+.progress-area { margin-bottom: 10px; }
+
+.progress-track {
+  height: 6px;
+  background: #e8eaef;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #4361ee, #f72585);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.progress-text {
+  font-size: 11px;
+  color: #666;
+  margin-top: 4px;
+  text-align: center;
+}
+
+/* ============ 领取结果 ============ */
+.claim-results { margin-bottom: 8px; }
+
+.result-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: #fff;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.result-item .name { font-weight: 500; }
+.result-ok   { color: #2d6a2e; }
+.result-fail { color: #c00; }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 18px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  z-index: 999;
+  animation: toast-in 0.2s ease;
+}
+
+.toast.info    { background: #4361ee; }
+.toast.success { background: #2d6a2e; }
+.toast.error   { background: #c00; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+/* ============ 重命名输入 ============ */
+.rename-input {
+  width: 120px;
+  padding: 2px 4px;
+  border: 1px solid #4361ee;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- 顶栏 -->
+    <header class="header">
+      <h1 class="title">即梦账号管理</h1>
+      <div class="header-actions">
+        <button id="btn-save" class="btn btn-primary">保存当前账号</button>
+      </div>
+    </header>
+
+    <!-- 摘要栏 -->
+    <div id="summary-bar" class="summary-bar hidden">
+      <div class="summary-item">
+        <span class="summary-label">账号</span>
+        <span id="summary-count" class="summary-value">0</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">总积分</span>
+        <span id="summary-credits" class="summary-value">--</span>
+      </div>
+      <div class="summary-item">
+        <span class="summary-label">今日已领</span>
+        <span id="summary-claimed" class="summary-value">0</span>
+      </div>
+      <button id="btn-check-all" class="btn btn-sm btn-outline" title="刷新所有账号状态">刷新</button>
+    </div>
+
+    <!-- 账号列表 -->
+    <div id="account-list" class="account-list">
+      <div class="empty-state">
+        <p>还没有保存的账号</p>
+        <p class="hint">请先在浏览器中登录即梦，然后点击「保存当前账号」</p>
+      </div>
+    </div>
+
+    <!-- 批量操作栏 -->
+    <div class="batch-bar">
+      <button id="btn-claim-all" class="btn btn-accent btn-wide">一键领取全部积分</button>
+    </div>
+
+    <!-- 进度条 -->
+    <div id="progress-area" class="progress-area hidden">
+      <div class="progress-track">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="progress-text" class="progress-text">准备中...</div>
+    </div>
+
+    <!-- 领取结果 -->
+    <div id="claim-results" class="claim-results hidden"></div>
+
+    <!-- 状态提示 -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

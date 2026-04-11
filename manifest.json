@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "即梦账号切换器",
+  "version": "1.0.0",
+  "description": "一键保存/切换即梦账号，批量领取每日免费积分",
+  "permissions": [
+    "cookies",
+    "storage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.jianying.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup/popup.html"
+  }
+}
