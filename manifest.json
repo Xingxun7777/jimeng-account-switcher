@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "即梦账号切换器",
-  "version": "1.0.0",
-  "description": "一键保存/切换即梦账号，批量领取每日免费积分",
+  "version": "1.2.0",
+  "description": "即梦多账号快速切换、积分/VIP 状态查看、Session 过期告警、账号导入导出",
   "permissions": [
     "cookies",
     "storage",

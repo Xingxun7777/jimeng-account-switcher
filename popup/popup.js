@@ -1,21 +1,28 @@
 // ================================================================
-// 即梦账号切换器 - Popup 界面逻辑 V2
+// 即梦账号切换器 - Popup V3 (精简版：切换 + 积分显示)
 // ================================================================
 
 const $ = (sel) => document.querySelector(sel);
 const $list = $('#account-list');
 const $btnSave = $('#btn-save');
-const $btnClaimAll = $('#btn-claim-all');
 const $btnCheckAll = $('#btn-check-all');
 const $summaryBar = $('#summary-bar');
 const $summaryCount = $('#summary-count');
 const $summaryCredits = $('#summary-credits');
-const $summaryClaimed = $('#summary-claimed');
 const $progressArea = $('#progress-area');
 const $progressFill = $('#progress-fill');
 const $progressText = $('#progress-text');
-const $claimResults = $('#claim-results');
 const $toast = $('#toast');
+const $btnToggleSettings = $('#btn-toggle-settings');
+const $settingsPanel = $('#settings-panel');
+const $btnExport = $('#btn-export');
+const $btnImport = $('#btn-import');
+const $fileImport = $('#file-import');
+const $expiredBanner = $('#expired-banner');
+const $expiredText = $('#expired-text');
+const $btnExpiredAction = $('#btn-expired-action');
+
+let cachedCurrentId = null;
 
 // ======================== 工具函数 ========================
 
@@ -43,10 +50,6 @@ function formatTime(ts) {
   return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-function todayStr() {
-  return new Date().toISOString().split('T')[0];
-}
-
 function formatVipExpiry(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -57,11 +60,12 @@ function formatVipExpiry(ts) {
 
 // ======================== 渲染 ========================
 
-async function render() {
-  const [accounts, currentId] = await Promise.all([
-    sendMsg({ action: 'getAccounts' }),
-    sendMsg({ action: 'detectCurrent' }),
-  ]);
+async function render(detectCurrent = true) {
+  const accounts = await sendMsg({ action: 'getAccounts' });
+  if (detectCurrent || cachedCurrentId === null) {
+    cachedCurrentId = await sendMsg({ action: 'detectCurrent' });
+  }
+  const currentId = cachedCurrentId;
 
   if (!accounts || !accounts.length) {
     $list.innerHTML = `
@@ -69,27 +73,23 @@ async function render() {
         <p>还没有保存的账号</p>
         <p class="hint">请先在浏览器中登录即梦，然后点击「保存当前账号」</p>
       </div>`;
-    $btnClaimAll.disabled = true;
     $summaryBar.classList.add('hidden');
+    $expiredBanner.classList.add('hidden');
     return;
   }
 
-  $btnClaimAll.disabled = false;
   $summaryBar.classList.remove('hidden');
-  const today = todayStr();
+  updateExpiredBanner(accounts);
 
   // 摘要栏
-  const claimedCount = accounts.filter(a => a.lastClaim === today).length;
   const totalCredits = accounts.reduce((sum, a) => sum + (a.cachedCredits?.total || 0), 0);
-  const hasCreditsData = accounts.some(a => a.cachedCredits);
+  const hasData = accounts.some(a => a.cachedCredits);
   $summaryCount.textContent = accounts.length;
-  $summaryCredits.textContent = hasCreditsData ? totalCredits : '--';
-  $summaryClaimed.textContent = `${claimedCount}/${accounts.length}`;
+  $summaryCredits.textContent = hasData ? totalCredits : '--';
 
   // 账号列表
-  $list.innerHTML = accounts.map((a) => {
+  $list.innerHTML = accounts.map(a => {
     const isCurrent = a.id === currentId;
-    const claimedToday = a.lastClaim === today;
     const initial = (a.name || '?')[0].toUpperCase();
     const sessionClass = a.sessionValid === true ? 'valid' : a.sessionValid === false ? 'expired' : 'unknown';
     const credits = a.cachedCredits;
@@ -112,9 +112,8 @@ async function render() {
             </div>
             <div class="account-meta">
               ${isCurrent ? '<span class="badge current">当前</span>' : ''}
-              ${claimedToday ? '<span class="badge claimed">今日已领</span>' : ''}
               ${vip?.isVip ? `<span class="badge vip">${escapeHtml(vip.vipType || 'VIP')} ${formatVipExpiry(vip.expireTime)}</span>` : ''}
-              <span class="save-time">${formatTime(a.savedAt)}</span>
+              <span class="save-time">${formatTime(a.lastChecked || a.savedAt)}</span>
             </div>
           </div>
         </div>
@@ -124,16 +123,12 @@ async function render() {
           <button class="btn btn-delete btn-sm" data-action="delete" data-id="${a.id}" title="删除">&#10005;</button>
         </div>
       </div>
+      ${credits ? `
       <div class="card-bottom">
         <div class="credits-info">
-          ${credits
-            ? `<span>积分: <span class="credits-num">${credits.total}</span></span>`
-            : '<span style="color:#bbb">积分: --</span>'}
+          <span>积分: <span class="credits-num">${credits.total}</span></span>
         </div>
-        <div class="card-bottom-actions">
-          <button class="btn btn-claim-one btn-sm" data-action="claimOne" data-id="${a.id}" data-name="${escapeHtml(a.name)}">领取</button>
-        </div>
-      </div>
+      </div>` : ''}
     </div>`;
   }).join('');
 
@@ -154,20 +149,21 @@ function bindCardEvents() {
         showToast('正在切换账号...', 'info');
         const res = await sendMsg({ action: 'switchAccount', accountId: id });
         if (res?.success) {
+          cachedCurrentId = id;
           showToast(`已切换到 ${res.account.name}`, 'success');
         } else {
           showToast(res?.error || '切换失败', 'error');
         }
-        await render();
+        await render(true);
       }
 
       if (action === 'delete') {
         const card = btn.closest('.account-card');
         const name = card.querySelector('.account-name')?.textContent || '';
         if (!confirm(`确定删除「${name}」吗？`)) return;
-        const res = await sendMsg({ action: 'deleteAccount', accountId: id });
-        if (res?.success) showToast('已删除', 'success');
-        await render();
+        await sendMsg({ action: 'deleteAccount', accountId: id });
+        showToast('已删除', 'success');
+        await render(true);
       }
 
       if (action === 'rename') {
@@ -180,34 +176,19 @@ function bindCardEvents() {
         btn.style.display = 'none';
         input.focus();
         input.select();
-
         const commit = async () => {
           const newName = input.value.trim() || oldName;
           if (newName !== oldName) {
             await sendMsg({ action: 'renameAccount', accountId: id, name: newName });
             showToast(`已改名为「${newName}」`, 'success');
           }
-          await render();
+          await render(false);
         };
         input.addEventListener('blur', commit);
         input.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter') input.blur();
           if (ev.key === 'Escape') { input.value = oldName; input.blur(); }
         });
-      }
-
-      if (action === 'claimOne') {
-        const name = btn.dataset.name;
-        btn.disabled = true;
-        btn.textContent = '...';
-        showToast(`正在为「${name}」领取积分...`, 'info');
-        const res = await sendMsg({ action: 'claimOne', accountId: id });
-        if (res?.success) {
-          showToast(`「${name}」领取成功`, 'success');
-        } else {
-          showToast(res?.error || '领取失败', 'error');
-        }
-        await render();
       }
     });
   });
@@ -219,93 +200,108 @@ $btnSave.addEventListener('click', async () => {
   $btnSave.disabled = true;
   $btnSave.textContent = '保存中...';
   showToast('正在保存当前登录状态...', 'info');
-
   const res = await sendMsg({ action: 'saveCurrentAccount' });
-
   if (res?.success) {
-    showToast(
-      res.isUpdate ? `已更新: ${res.account.name}` : `已保存: ${res.account.name}`,
-      'success'
-    );
-    await render();
+    showToast(res.isUpdate ? `已更新: ${res.account.name}` : `已保存: ${res.account.name}`, 'success');
+    await render(true);
   } else {
     showToast(res?.error || '保存失败', 'error');
   }
-
   $btnSave.disabled = false;
   $btnSave.textContent = '保存当前账号';
-});
-
-// ======================== 一键领取全部 ========================
-
-$btnClaimAll.addEventListener('click', async () => {
-  const accounts = await sendMsg({ action: 'getAccounts' });
-  if (!accounts?.length) {
-    showToast('没有保存的账号', 'error');
-    return;
-  }
-
-  if (!confirm(`将依次为 ${accounts.length} 个账号领取今日免费积分，过程中请勿操作浏览器。继续？`)) return;
-
-  $btnClaimAll.disabled = true;
-  $btnSave.disabled = true;
-  $claimResults.classList.add('hidden');
-  $claimResults.innerHTML = '';
-
-  $progressArea.classList.remove('hidden');
-  $progressFill.style.width = '0%';
-  $progressText.textContent = `准备领取 ${accounts.length} 个账号...`;
-
-  const res = await sendMsg({ action: 'claimAll' });
-
-  if (res?.success && res.results) {
-    $progressFill.style.width = '100%';
-    const okCount = res.results.filter(r => r.success).length;
-    $progressText.textContent = `完成! ${okCount}/${res.results.length} 个账号领取成功`;
-
-    $claimResults.classList.remove('hidden');
-    $claimResults.innerHTML = res.results.map(r => {
-      const statusClass = r.success ? 'result-ok' : 'result-fail';
-      const statusText = r.success ? '已领取' : (r.error || '失败');
-      const c = r.credits?.credit || r.credits;
-      const total = c ? (c.gift_credit || 0) + (c.purchase_credit || 0) + (c.vip_credit || 0) : null;
-      return `
-        <div class="result-item">
-          <span class="name">${escapeHtml(r.accountName)}</span>
-          <span class="${statusClass}">${statusText}${total !== null ? ` (余额: ${total})` : ''}</span>
-        </div>`;
-    }).join('');
-
-    showToast(`${okCount} 个账号领取完成`, 'success', 4000);
-  } else {
-    $progressFill.style.width = '100%';
-    $progressText.textContent = res?.error || '领取失败';
-    showToast(res?.error || '领取失败', 'error');
-  }
-
-  $btnClaimAll.disabled = false;
-  $btnSave.disabled = false;
-  await render();
 });
 
 // ======================== 刷新所有状态 ========================
 
 $btnCheckAll.addEventListener('click', async () => {
+  if (!confirm('刷新期间会临时切换 Cookie 查询各账号状态，请勿操作即梦页面。继续？')) return;
   $btnCheckAll.disabled = true;
-  $btnCheckAll.textContent = '检查中...';
-  showToast('正在查询所有账号状态...', 'info', 10000);
+  $btnCheckAll.textContent = '查询中...';
+  $progressArea.classList.remove('hidden');
+  $progressFill.style.width = '0%';
+  $progressText.textContent = '准备中...';
 
   const res = await sendMsg({ action: 'checkAllStatuses' });
 
+  $progressArea.classList.add('hidden');
   if (res?.success) {
     showToast('状态已刷新', 'success');
   } else {
     showToast(res?.error || '查询失败', 'error');
   }
-
   $btnCheckAll.disabled = false;
-  $btnCheckAll.textContent = '刷新';
-  await render();
+  $btnCheckAll.textContent = '刷新状态';
+  await render(true);
+});
+
+// ======================== 设置面板 ========================
+
+$btnToggleSettings.addEventListener('click', () => {
+  $settingsPanel.classList.toggle('hidden');
+});
+
+// ======================== 导入导出 ========================
+
+$btnExport.addEventListener('click', async () => {
+  const accounts = await sendMsg({ action: 'getAccounts' }) || [];
+  if (!accounts.length) { showToast('没有可导出的账号', 'error'); return; }
+  const blob = new Blob([JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), accounts }, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `jimeng-accounts-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 0);
+  showToast(`已导出 ${accounts.length} 个账号`, 'success');
+});
+
+$btnImport.addEventListener('click', () => $fileImport.click());
+
+$fileImport.addEventListener('change', async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    if (!Array.isArray(payload?.accounts)) { showToast('格式错误', 'error'); return; }
+    const mode = confirm(`导入 ${payload.accounts.length} 个账号\n确定=合并 / 取消=覆盖`) ? 'merge' : 'replace';
+    const res = await sendMsg({ action: 'importAccounts', accounts: payload.accounts, mode });
+    if (res?.success) { showToast(`${res.added} 新增 / ${res.updated} 更新`, 'success'); await render(true); }
+    else showToast(res?.error || '导入失败', 'error');
+  } catch (err) { showToast(`导入失败: ${err.message}`, 'error'); }
+  finally { $fileImport.value = ''; }
+});
+
+// ======================== 过期账号横幅 ========================
+
+function updateExpiredBanner(accounts) {
+  const expired = accounts.filter(a => a.sessionValid === false);
+  if (!expired.length) { $expiredBanner.classList.add('hidden'); return; }
+  $expiredBanner.classList.remove('hidden');
+  $expiredText.textContent = `${expired.length} 个账号 session 过期`;
+  $btnExpiredAction.onclick = async () => {
+    const first = expired[0];
+    showToast(`切换到「${first.name}」...`, 'info');
+    await sendMsg({ action: 'switchAccount', accountId: first.id });
+    cachedCurrentId = first.id;
+    showToast('请在即梦页面登录后点「保存当前账号」更新', 'info', 5000);
+    await render(true);
+  };
+}
+
+// ======================== 进度监听 ========================
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (!msg?.__progress) return;
+  $progressArea.classList.remove('hidden');
+  const pct = msg.total > 0 ? Math.floor((msg.current / msg.total) * 100) : 0;
+  $progressFill.style.width = `${pct}%`;
+  if (msg.phase === 'done') {
+    $progressText.textContent = '完成';
+    setTimeout(() => $progressArea.classList.add('hidden'), 1500);
+  } else {
+    $progressText.textContent = msg.message || `${msg.current}/${msg.total} ${msg.name || ''}`;
+  }
 });
 
 // ======================== 初始化 ========================

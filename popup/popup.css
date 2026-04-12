@@ -263,9 +263,6 @@ body {
   gap: 4px;
 }
 
-/* ============ 批量操作 ============ */
-.batch-bar { margin-bottom: 10px; }
-
 /* ============ 进度条 ============ */
 .progress-area { margin-bottom: 10px; }
 
@@ -342,4 +339,65 @@ body {
   font-size: 13px;
   font-weight: 600;
   outline: none;
+}
+
+/* ============ 过期告警横幅 ============ */
+.expired-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #fff8e1;
+  border: 1px solid #ffd54f;
+  border-radius: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #8d6e00;
+}
+.banner-icon { font-size: 14px; }
+.banner-text { flex: 1; }
+
+/* ============ 设置面板 ============ */
+.settings-panel {
+  background: #fff;
+  border: 1px solid #e8eaef;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.settings-row:last-child { margin-bottom: 0; }
+.settings-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #333;
+  cursor: pointer;
+}
+.settings-label input[type=checkbox] { cursor: pointer; }
+#input-auto-claim-time {
+  padding: 3px 6px;
+  border: 1px solid #c8d0e0;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.settings-status {
+  font-size: 11px;
+  color: #888;
+  padding: 4px 0;
+  border-top: 1px dashed #e8eaef;
+  margin-bottom: 8px;
+}
+.header-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
 }

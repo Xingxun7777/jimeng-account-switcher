@@ -12,8 +12,25 @@
       <h1 class="title">即梦账号管理</h1>
       <div class="header-actions">
         <button id="btn-save" class="btn btn-primary">保存当前账号</button>
+        <button id="btn-toggle-settings" class="btn btn-sm btn-outline" title="设置">&#9881;</button>
       </div>
     </header>
+
+    <!-- Session 过期告警横幅 -->
+    <div id="expired-banner" class="expired-banner hidden">
+      <span class="banner-icon">&#9888;</span>
+      <span id="expired-text" class="banner-text"></span>
+      <button id="btn-expired-action" class="btn btn-sm btn-outline">查看</button>
+    </div>
+
+    <!-- 设置面板 -->
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-row">
+        <button id="btn-export" class="btn btn-sm btn-outline">导出账号</button>
+        <button id="btn-import" class="btn btn-sm btn-outline">导入账号</button>
+        <input type="file" id="file-import" accept="application/json" hidden />
+      </div>
+    </div>
 
     <!-- 摘要栏 -->
     <div id="summary-bar" class="summary-bar hidden">
@@ -25,11 +42,7 @@
         <span class="summary-label">总积分</span>
         <span id="summary-credits" class="summary-value">--</span>
       </div>
-      <div class="summary-item">
-        <span class="summary-label">今日已领</span>
-        <span id="summary-claimed" class="summary-value">0</span>
-      </div>
-      <button id="btn-check-all" class="btn btn-sm btn-outline" title="刷新所有账号状态">刷新</button>
+      <button id="btn-check-all" class="btn btn-sm btn-outline" title="刷新所有账号状态（过程中请勿操作即梦页面）">刷新状态</button>
     </div>
 
     <!-- 账号列表 -->
@@ -40,11 +53,6 @@
       </div>
     </div>
 
-    <!-- 批量操作栏 -->
-    <div class="batch-bar">
-      <button id="btn-claim-all" class="btn btn-accent btn-wide">一键领取全部积分</button>
-    </div>
-
     <!-- 进度条 -->
     <div id="progress-area" class="progress-area hidden">
       <div class="progress-track">
@@ -52,9 +60,6 @@
       </div>
       <div id="progress-text" class="progress-text">准备中...</div>
     </div>
-
-    <!-- 领取结果 -->
-    <div id="claim-results" class="claim-results hidden"></div>
 
     <!-- 状态提示 -->
     <div id="toast" class="toast hidden"></div>

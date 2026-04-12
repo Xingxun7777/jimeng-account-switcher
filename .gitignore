@@ -27,3 +27,4 @@ build/
 *.zip
 *.crx
 *.pem
+.backup-v1.0.0/
