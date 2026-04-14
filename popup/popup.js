@@ -165,6 +165,10 @@ async function render(detectCurrent = true) {
   }).join('');
 
   bindCardEvents();
+
+  // render 结束时同步权限态：render 重建 DOM 会清掉之前 setFunctionalButtonsEnabled(false) 的效果，
+  // 这里重新贯彻一次
+  updatePermissionBanner().catch(() => {});
 }
 
 // ======================== 事件绑定 ========================

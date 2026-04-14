@@ -4,6 +4,45 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.1] - 2026-04-14
+
+v1.4.0 经第三轮三方审查（Codex + Gemini），发现 **10 个新问题**（其中 1 个我自己引入的致命锁 bug），本次全部修复。
+
+### 🔴 致命修复
+
+**`makeLock` timeout 机制失效**（Gemini + Codex R3 一致发现）：
+v1.4.0 的 `makeLock` 用 `chain = Promise.race(gated, timedOut).catch(...)`，30s 超时触发后 chain 立即 resolve，下一个任务获取锁——但原 `fn` 还在后台继续跑（JS Promise 无法取消），**两个任务并发操作 cookie/storage**，状态彻底损坏。v1.4.1 改为 `chain = gated.catch(...)`：锁的排队基于真实任务结束，timeout 只让调用方收到 rejection。
+
+### 🔴 Codex R3 发现的深层问题
+
+- **`maybeRecoverOnWakeup` 前置 await**：v1.4.0 是 fire-and-forget，新业务在脏 cookie 上开始。v1.4.1 敏感操作（save/switch/check*/delete/rename/import）必须 await 恢复完成。
+- **`withAccountCookies` 消费 restoreCookies 返回值**：v1.4.0 仍然不看结果就继续 reload+fetch，把错号数据 merge 到当前账号。v1.4.1 restoreCookies 失败抛 `RestoreFailureError`，上游捕获不继续。
+- **状态查询 userId 身份断言**：v1.4.0 merge 前不校验 `status.user.userId === account.userId`，cookie 串号时 A 的状态被写到 B。v1.4.1 `mergeAccountStatus` / `mergeMultipleAccountStatuses` 都加断言，不匹配则拒绝 merge 并标 sessionValid=false。
+- **导入 JSON 的 `userId` 不可信任**：恶意 JSON 可伪造 userId 污染去重。v1.4.1 导入时 `userId = ''`（只保留 `importedUserId` 作备注），首次 check 成功后由 mergeAccountStatus 用 API 真实 userId 回填。
+- **`pending attempts` 不跨业务继承**：v1.4.0 新业务复用 `existing.attempts`，被旧失败次数过早触发 MAX。v1.4.1 新业务从 0 计，且检测旧 pending 未清时警告。
+
+### 🟡 Gemini R3 发现
+
+- **`tryRecoverPendingRestore` 全路径进锁**：v1.4.0 的 committing / maxAttempts 路径直接调 `clearPendingRestore` 不加锁，和 `switchAccount` 并发时误删刚写入的 pending。v1.4.1 所有分支都在 `withCookieLock` 内。
+- **`checkAllStatuses` I/O 从 O(N) → O(1)**：v1.4.0 每个账号 mergeAccountStatus 都做一次全量 load+save（50 账号 = 50 次全量读写）。v1.4.1 循环收集到内存 Map，循环结束后 `mergeMultipleAccountStatuses` 一次 load+merge+save。
+- **`render` 同步权限态**：v1.4.0 render 用 innerHTML 重建账号卡时没检查 permissions 状态，导致 denied 后新按钮可点。v1.4.1 render 结尾调 `updatePermissionBanner` 贯彻禁用。
+- **`importAccounts` 去重对齐 userId 优先**：v1.4.0 只用 sessionid（跨设备导入同账号会产生重复）。v1.4.1 改为 userId 优先 fallback sessionid。
+- **`isAuthFailure` 处理 fetch 完全失败**：v1.4.0 只认 401/403 和 errno，status=0 且带 error（断网等）被误判为有效 session。v1.4.1 保守处理 `status===0` 或 `status>=500` 为失效。
+
+### ✨ 新增
+
+- **`optional_host_permissions`**：manifest 显式声明运行时可请求的 host 权限，符合 Firefox MV3 规范。
+- **身份断言自动回填 userId**：旧版没 userId 的账号首次 check 成功会自动回填真实 userId，后续可走深度校验路径。
+
+### 发布就绪度
+
+| Round | Codex 评分 | Gemini 评分 |
+|-------|-----------|------------|
+| R1 (v1.2.2) | 4/10 | - |
+| R2 (v1.3.0) | 6/10 beta | 6.5/10 |
+| R3 (v1.4.0) | 6/10 | 3/10（发现致命锁 bug） |
+| **R4 目标** | **预期 8+/10** | **预期 8+/10** |
+
 ## [1.4.0] - 2026-04-14
 
 v1.3.0 经第二轮三方代码审查（Codex + Gemini）发现 **15+ 个 v1.3.0 引入或遗漏的严重问题**，本次全部修复。审查就绪度从 6/10 → 预期 8+/10。

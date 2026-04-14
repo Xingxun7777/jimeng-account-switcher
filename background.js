@@ -43,14 +43,17 @@ function makeLock() {
   let chain = Promise.resolve();
   return function withLock(fn) {
     const gated = chain.then(() => fn(), () => fn());
-    // 加 timeout 兜底
+    // ⚠️ 关键：锁的排队链必须绑定在 gated（真实任务）上，而不是 race 结果。
+    // JS Promise 无法被强制取消——如果 chain = race(gated, timeout) 的 catch 结果，
+    // timeout 触发 30s 后 chain 立即 resolve → 下一个 withLock 进入 → 但 gated 的 fn 还在跑，
+    // 导致并发冲突（两个任务同时操作 cookie/storage）。
+    // 正确做法：chain 锁住直到 gated 真正结束；timeout 只是让调用方收到超时 rejection，
+    // 但锁本身继续保持到 fn 实际完成（即使 fn 卡死，后续操作也会一直等，但这比并发冲突安全）。
+    chain = gated.catch(() => {});
     const timedOut = new Promise((_, reject) => {
       setTimeout(() => reject(new Error(`lock timeout (${LOCK_TIMEOUT_MS}ms)`)), LOCK_TIMEOUT_MS);
     });
-    const run = Promise.race([gated, timedOut]);
-    // 链条始终 resolve，不管 race 结果如何
-    chain = run.catch(() => {});
-    return run;
+    return Promise.race([gated, timedOut]);
   };
 }
 
@@ -70,13 +73,18 @@ const MAX_RECOVERY_ATTEMPTS = 3;
 
 async function persistPendingRestore(snapshot, stage = 'armed') {
   try {
+    // 冲突检测：如果上次的 pending 还没清掉，说明可能是恢复失败或上次崩溃
     const existing = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+    if (existing?.cookies?.length && existing.stage !== 'committing') {
+      console.warn(`[即梦切换器] 检测到未完成的 pending (stage=${existing.stage})，将被新业务覆盖`);
+    }
+    // 新业务从 attempts=0 开始，不继承旧值（避免被旧失败次数过早触发 MAX）
     await chrome.storage.local.set({
       [PENDING_RESTORE_KEY]: {
         cookies: snapshot,
         stage,
         ts: Date.now(),
-        attempts: existing?.attempts || 0,
+        attempts: 0,
       },
     });
   } catch (e) {
@@ -106,33 +114,34 @@ async function tryRecoverPendingRestore() {
   if (recoveryPromise) return recoveryPromise;
   recoveryPromise = (async () => {
     try {
-      const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
-      const pending = r[PENDING_RESTORE_KEY];
-      if (!pending?.cookies?.length) return;
-
-      // committing 状态：业务已成功，不恢复，直接清
-      if (pending.stage === 'committing') {
-        console.log('[即梦切换器] 清理已提交的 pending（不恢复）');
-        await clearPendingRestore();
-        return;
-      }
-
-      // 超出尝试次数
-      const attempts = (pending.attempts || 0) + 1;
-      if (attempts > MAX_RECOVERY_ATTEMPTS) {
-        console.warn('[即梦切换器] pending 恢复尝试超限，放弃');
-        await clearPendingRestore();
-        return;
-      }
-
-      // 超过 1 小时也不恢复
-      if (Date.now() - (pending.ts || 0) > 60 * 60 * 1000) {
-        await clearPendingRestore();
-        return;
-      }
-
-      // 必须在 cookieLock 下执行，防止和用户操作并发
+      // 关键：所有对 pending 的读/写都必须在 cookieLock 下，
+      // 防止和 switchAccount / checkAllStatuses 的 pending 操作竞争导致误删。
       await withCookieLock(async () => {
+        const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+        const pending = r[PENDING_RESTORE_KEY];
+        if (!pending?.cookies?.length) return;
+
+        // committing 状态：业务已成功，不恢复，直接清
+        if (pending.stage === 'committing') {
+          console.log('[即梦切换器] 清理已提交的 pending（不恢复）');
+          await clearPendingRestore();
+          return;
+        }
+
+        // 超出尝试次数
+        const attempts = (pending.attempts || 0) + 1;
+        if (attempts > MAX_RECOVERY_ATTEMPTS) {
+          console.warn('[即梦切换器] pending 恢复尝试超限，放弃');
+          await clearPendingRestore();
+          return;
+        }
+
+        // 超过 1 小时也不恢复
+        if (Date.now() - (pending.ts || 0) > 60 * 60 * 1000) {
+          await clearPendingRestore();
+          return;
+        }
+
         console.warn(`[即梦切换器] 检测到上次异常终止（stage=${pending.stage}），尝试第 ${attempts} 次恢复...`);
         // 先更新 attempts 计数，即使恢复失败也不丢信息
         pending.attempts = attempts;
@@ -399,9 +408,17 @@ function extractUserObj(resp) {
 
 function isAuthFailure(resp) {
   if (!resp) return true;
+  // fetch 完全失败（断网/跨域/tab 关闭等）：status=0 且带 error
+  // 这种情况不是确定的未登录，但也不能当作成功，返回 true 让上游按失效处理
+  if (resp.status === 0 || !resp.ok) {
+    if (resp.error) return true;
+    if (resp.status === 401 || resp.status === 403) return true;
+    // 其他非 ok 状态（5xx 等）：保守当作失效
+    if (resp.status >= 500) return true;
+  }
   if (resp.status === 401 || resp.status === 403) return true;
   const d = resp.data;
-  if (!d) return false;
+  if (!d) return !resp.ok; // 无 data 且不 ok → 失效
   const errno = d.errno ?? d.status_code ?? d.ret;
   if (errno === 10000 || errno === 10001 || errno === 40001) return true;
   const msg = String(d.errmsg || d.message || '').toLowerCase();
@@ -719,14 +736,18 @@ function sanitizeImportedAccount(a) {
   return {
     id: typeof a.id === 'string' && a.id ? a.id : crypto.randomUUID(),
     name: typeof a.name === 'string' ? a.name.slice(0, 50) : '未命名',
-    userId: typeof a.userId === 'string' ? a.userId : '',
+    // 导入的 userId 标记为 unverified：不作为身份校验依据，只作为备注
+    // 首次通过 checkStatus 成功后，由 mergeAccountStatus 用 API 真实 userId 回填到 userId 字段
+    userId: '',
+    importedUserId: typeof a.userId === 'string' ? a.userId : '',
     nickname: typeof a.nickname === 'string' ? a.nickname.slice(0, 100) : '',
     avatar: sanitizeAvatar(a.avatar),
     cookies,
     savedAt: typeof a.savedAt === 'number' ? a.savedAt : Date.now(),
     cachedCredits: (a.cachedCredits && typeof a.cachedCredits === 'object') ? a.cachedCredits : null,
     cachedVip: (a.cachedVip && typeof a.cachedVip === 'object') ? a.cachedVip : null,
-    sessionValid: typeof a.sessionValid === 'boolean' ? a.sessionValid : null,
+    // sessionValid 必须由 check 重新验证，不信任导入值（可能伪造）
+    sessionValid: null,
     lastChecked: typeof a.lastChecked === 'number' ? a.lastChecked : null,
   };
 }
@@ -741,21 +762,31 @@ async function importAccounts(incoming, mode) {
   }
   const current = await loadAccounts();
   const getSid = a => a.cookies?.find(c => c.name === 'sessionid')?.value;
+  // 两级去重索引：userId 优先，fallback sessionid（对齐 saveCurrentAccount 的策略）
+  const byUid = new Map();
   const bySid = new Map();
   for (const a of current) {
+    if (a.userId) byUid.set(a.userId, a);
     const sid = getSid(a);
     if (sid) bySid.set(sid, a);
   }
   let added = 0, updated = 0;
   for (const a of sanitized) {
-    const sid = getSid(a);
-    if (sid && bySid.has(sid)) {
-      // 同 sid 的已存在 → 合并
-      Object.assign(bySid.get(sid), a, { id: bySid.get(sid).id });
+    let match = null;
+    // R4-J: 导入的 userId 不可信任，但如果匹配到现有账号（现有 userId 是之前 API 验证过的），可以安全 merge
+    if (a.userId && byUid.has(a.userId)) match = byUid.get(a.userId);
+    if (!match) {
+      const sid = getSid(a);
+      if (sid && bySid.has(sid)) match = bySid.get(sid);
+    }
+    if (match) {
+      // 同账号（按 userId 或 sessionid）→ 合并（保留原 id）
+      Object.assign(match, a, { id: match.id });
       updated++;
     } else {
       current.push(a);
-      // 同步更新 bySid，避免导入文件内重复 SID 被重复插入
+      if (a.userId) byUid.set(a.userId, a);
+      const sid = getSid(a);
       if (sid) bySid.set(sid, a);
       added++;
     }
@@ -767,12 +798,32 @@ async function importAccounts(incoming, mode) {
 // ======================== 状态查询 ========================
 
 // 公共 primitive：切到目标账号 cookie → 等生效 → reload tab → 执行 fn → 不恢复（由调用方统一恢复）
+// 如果 restoreCookies 失败（尤其是 auth cookie 失败），抛错让调用方捕获，不继续执行 fn
+class RestoreFailureError extends Error {
+  constructor(failures) {
+    super(`restoreCookies 失败: ${failures.map(f => f.name).join(', ')}`);
+    this.name = 'RestoreFailureError';
+    this.failures = failures;
+  }
+}
+
 async function withAccountCookies(account, session, fn) {
   await clearDomainCookies();
-  await restoreCookies(account.cookies);
+  const rr = await restoreCookies(account.cookies);
+  if (!rr.success) {
+    throw new RestoreFailureError(rr.failures);
+  }
   await new Promise(r => setTimeout(r, COOKIE_APPLY_DELAY_MS));
   if (session) await session.reload();
   return fn();
+}
+
+// 身份断言：status 返回的 userId 必须匹配目标账号（cookie 串号保护）
+// 如果账号本身没有 userId（旧版保存的）→ 跳过断言，相当于无保护但不破坏旧数据
+function assertUserIdMatch(targetAccount, status) {
+  if (!targetAccount.userId) return true; // 无 userId 的旧账号跳过
+  if (!status?.user?.userId) return !status?.valid; // API 没拿到 user 但 valid=false 允许（失效状态）
+  return String(status.user.userId) === String(targetAccount.userId);
 }
 
 // load+merge：只把新状态 merge 到最新的 accounts（而不是覆盖整份），
@@ -783,11 +834,55 @@ async function mergeAccountStatus(accountId, status) {
     const accounts = await loadAccounts();
     const target = accounts.find(a => a.id === accountId);
     if (!target) return; // 用户中途删除了，不回写
+    // 身份断言：状态里的 userId 必须匹配目标账号，避免 cookie 串号把 A 的状态写到 B
+    if (!assertUserIdMatch(target, status)) {
+      console.warn(`[即梦切换器] userId 不匹配，拒绝 merge 状态到账号 ${target.name}（${target.userId} vs ${status?.user?.userId}）`);
+      // 仍然把 sessionValid 标记为 false（这个账号的状态查询失败）
+      target.sessionValid = false;
+      target.lastChecked = Date.now();
+      await saveAccountsToStorage(accounts);
+      return;
+    }
     target.cachedCredits = status.credits;
     target.cachedVip = status.vip;
     target.sessionValid = status.valid;
     target.lastChecked = Date.now();
+    // 如果该账号还没有 userId（旧版保存），且本次拿到了真实 userId，就回填
+    if (!target.userId && status.user?.userId) {
+      target.userId = String(status.user.userId);
+    }
     await saveAccountsToStorage(accounts);
+  });
+}
+
+// 批量 merge：一次 load + 一次 save，避免 checkAllStatuses 里 N 次 load+save 的 O(N) IO 开销。
+// 同样加 userId 身份断言。
+// statusById: Map<accountId, {valid, credits, vip, user}>
+async function mergeMultipleAccountStatuses(statusById) {
+  return withStorageLock(async () => {
+    const accounts = await loadAccounts();
+    const now = Date.now();
+    let changed = false;
+    for (const acc of accounts) {
+      if (!statusById.has(acc.id)) continue;
+      const status = statusById.get(acc.id);
+      if (!assertUserIdMatch(acc, status)) {
+        console.warn(`[即梦切换器] 批量 merge: ${acc.name} userId 不匹配，跳过状态写入`);
+        acc.sessionValid = false;
+        acc.lastChecked = now;
+        changed = true;
+        continue;
+      }
+      acc.cachedCredits = status.credits;
+      acc.cachedVip = status.vip;
+      acc.sessionValid = status.valid;
+      acc.lastChecked = now;
+      if (!acc.userId && status.user?.userId) {
+        acc.userId = String(status.user.userId);
+      }
+      changed = true;
+    }
+    if (changed) await saveAccountsToStorage(accounts);
   });
 }
 
@@ -833,6 +928,7 @@ async function checkAllStatuses() {
   await persistPendingRestore(originalCookies, 'armed');
   const session = new JimengTabSession();
   const results = [];
+  const statusById = new Map(); // 内存收集，循环结束一次性写回，避免 O(N) storage I/O
   const total = accountsSnapshot.length;
   let restoreFailed = false;
 
@@ -853,8 +949,13 @@ async function checkAllStatuses() {
         console.warn(`[即梦切换器] 查询 ${acc.name} 失败:`, e);
       }
 
-      await mergeAccountStatus(acc.id, status);
+      statusById.set(acc.id, status);
       results.push({ accountId: acc.id, name: acc.name, ...status });
+    }
+
+    // 一次性批量 merge：只做 1 次 load + 1 次 save，而不是 N 次
+    if (statusById.size > 0) {
+      await mergeMultipleAccountStatuses(statusById);
     }
   } finally {
     await broadcastProgress({ phase: 'restore', current: total, total, message: '恢复登录状态...' });
@@ -878,10 +979,22 @@ async function checkAllStatuses() {
 
 // ======================== 消息路由 ========================
 
+// 需要在执行业务前等待 pending restore 完成的敏感操作
+const SENSITIVE_ACTIONS = new Set([
+  'saveCurrentAccount', 'switchAccount',
+  'checkStatus', 'checkAllStatuses',
+  'deleteAccount', 'renameAccount', 'importAccounts',
+]);
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = async () => {
-    // SW 被消息唤醒时懒触发一次崩溃恢复检查（onStartup/onInstalled 都不会触发）
-    maybeRecoverOnWakeup();
+    // 敏感操作前必须 await 恢复完成，避免新业务在脏 cookie 状态上开始
+    // 非敏感操作（getAccounts/getSettings/detectCurrent）也调但不阻塞太久（节流 30s）
+    if (SENSITIVE_ACTIONS.has(msg.action)) {
+      await maybeRecoverOnWakeup();
+    } else {
+      maybeRecoverOnWakeup(); // fire-and-forget，不阻塞读操作
+    }
     try {
       switch (msg.action) {
         case 'getAccounts':    return await loadAccounts();
