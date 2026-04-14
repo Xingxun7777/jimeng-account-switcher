@@ -116,30 +116,53 @@ git clone https://github.com/Xingxun7777/jimeng-account-switcher.git
 
 Firefox 128 及以上版本完整支持 Manifest V3 + `world: 'MAIN'` 注入脚本（这是本扩展必需的特性）。低于 128 的 Firefox 无法使用「刷新状态」功能。
 
-### 2.1 临时加载（最简单、开发用）
+> **⚠️ 重要前置说明**：Firefox 的 Release / Beta 版本**强制要求扩展签名**。下面三种方式各有限制，请根据你的需求选择。**未签名扩展没有真正"简单永久"的安装方式**——这是 Firefox 的安全设计，不是本扩展的限制。
+
+### 2.1 临时加载（开发 / 短期体验用）
 
 1. 地址栏输入 `about:debugging#/runtime/this-firefox` 回车
 2. 点击「**临时载入附加组件...**」（Load Temporary Add-on...）
 3. **注意：这里要选扩展文件夹中的 `manifest.json` 文件，不是文件夹本身**
 4. 扩展列表会显示"即梦账号管理（TEMPORARY）"
 
-**⚠️ 限制**：临时加载的扩展**每次重启 Firefox 就会消失**，要重新加载。适合偶尔用用或开发测试。
+**⚠️ 限制**：临时加载的扩展**每次重启 Firefox 就会消失**，要重新加载。**不适合长期使用**。
 
-### 2.2 永久安装方案 A：用 Firefox Developer Edition
+### 2.2 长期使用方案 A：用 Firefox Developer Edition / Nightly
 
-1. 下载 [Firefox Developer Edition](https://www.mozilla.org/zh-CN/firefox/developer/)（或 Firefox Nightly）
+这两个版本允许关闭签名强制要求。
+
+1. 下载 [Firefox Developer Edition](https://www.mozilla.org/zh-CN/firefox/developer/) 或 [Nightly](https://www.mozilla.org/zh-CN/firefox/nightly/)
 2. 地址栏输入 `about:config`，同意风险警告
-3. 搜索 `xpinstall.signatures.required`，双击将值改为 `false`
-4. 将扩展文件夹打包成 `.zip`，重命名为 `.xpi`
+3. 搜索 `xpinstall.signatures.required`，双击改为 `false`（**仅这两个版本生效，Release 版改了也没用**）
+4. 把扩展文件夹用 **7-Zip / WinRAR** 打成 `.zip`（**不能包含顶层文件夹，根目录直接是 manifest.json**），再把扩展名改成 `.xpi`
 5. 地址栏输入 `about:addons`，拖入 `.xpi` 文件安装
+6. 每次更新扩展需要重新打包安装
 
-### 2.3 永久安装方案 B：用 Profile 目录（正式版也能用）
+### 2.3 长期使用方案 B：自签名 XPI（稍麻烦，Release 版可用）
 
-1. 地址栏输入 `about:profiles`，找到当前使用的 profile 目录
-2. 在 profile 目录中找到或创建 `extensions/` 子目录
-3. 把扩展文件夹整个复制进去，**文件夹名必须改为** `jimeng-account-switcher@xingxun.local`（这是本扩展 manifest 里声明的 gecko.id）
-4. 重启 Firefox
-5. `about:addons` 中会看到扩展，打开即可
+Firefox 允许用户自签名 XPI 供自己使用：
+
+1. 注册 [addons.mozilla.org (AMO)](https://addons.mozilla.org/developers/) 开发者账号（免费）
+2. 用 [web-ext](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/) CLI 工具：
+   ```bash
+   npm install -g web-ext
+   cd jimeng-account-switcher/
+   web-ext sign --api-key=XXX --api-secret=YYY --channel=unlisted
+   ```
+3. 签名通过后会生成一个已签名的 `.xpi`，在任何版本的 Firefox 里都能永久安装
+
+> **注**：`--channel=unlisted` 不会提交到 AMO 商店，只供私人使用，审核通常几分钟自动通过。
+
+### 2.4 长期使用方案 C：正式发布到 AMO（推荐给正式分发）
+
+如果你想让其他人也能装，正经路径是提交到 AMO 审核：
+
+1. 把扩展打包成 `.zip`
+2. 上传到 <https://addons.mozilla.org/developers/addon/submit/>
+3. 选择"公开发布"（需要人工审核，1 天到几周不等）
+4. 审核通过后用户可在 AMO 一键安装
+
+**⚠️ 不要相信"修改 profile 目录手动放文件夹"这种方法**——这在老版 Firefox 上可行，但从 Firefox 48 起就被完全禁止了（除非走上面的签名流程）。某些网文/博客还在介绍这种方法，已过时。
 
 ---
 

@@ -27,7 +27,22 @@ let cachedCurrentId = null;
 // ======================== 工具函数 ========================
 
 function sendMsg(msg) {
-  return new Promise(resolve => chrome.runtime.sendMessage(msg, resolve));
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (response) => {
+        // 必须检查 lastError，否则 Chrome 会在 console 打印 "Unchecked runtime.lastError"
+        if (chrome.runtime.lastError) {
+          console.warn('[即梦] sendMessage 失败:', chrome.runtime.lastError.message);
+          resolve({ success: false, error: `通信失败: ${chrome.runtime.lastError.message}`, __sendMsgError: true });
+          return;
+        }
+        resolve(response);
+      });
+    } catch (e) {
+      console.error('[即梦] sendMessage 异常:', e);
+      resolve({ success: false, error: `通信异常: ${e.message}`, __sendMsgError: true });
+    }
+  });
 }
 
 let toastTimer = null;
@@ -258,13 +273,41 @@ $btnExport.addEventListener('click', async () => {
 
 $btnImport.addEventListener('click', () => $fileImport.click());
 
+// 三选一自定义对话框：Promise<'merge'|'replace'|null>
+function showImportModeDialog(count) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-box">
+        <div class="modal-title">导入账号</div>
+        <div class="modal-body">
+          检测到 <b>${count}</b> 个账号。<br>
+          请选择导入模式：
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-sm btn-outline" data-mode="cancel">取消</button>
+          <button class="btn btn-sm btn-outline" data-mode="replace">覆盖（清空现有）</button>
+          <button class="btn btn-sm btn-primary" data-mode="merge">合并（保留现有）</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const pick = (mode) => { overlay.remove(); resolve(mode === 'cancel' ? null : mode); };
+    overlay.querySelectorAll('button[data-mode]').forEach(b => {
+      b.addEventListener('click', () => pick(b.dataset.mode));
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) pick('cancel'); });
+  });
+}
+
 $fileImport.addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
   try {
     const payload = JSON.parse(await file.text());
-    if (!Array.isArray(payload?.accounts)) { showToast('格式错误', 'error'); return; }
-    const mode = confirm(`导入 ${payload.accounts.length} 个账号\n确定=合并 / 取消=覆盖`) ? 'merge' : 'replace';
+    if (!Array.isArray(payload?.accounts)) { showToast('格式错误：缺少 accounts 数组', 'error'); return; }
+    const mode = await showImportModeDialog(payload.accounts.length);
+    if (!mode) return; // 用户取消
     const res = await sendMsg({ action: 'importAccounts', accounts: payload.accounts, mode });
     if (res?.success) { showToast(`${res.added} 新增 / ${res.updated} 更新`, 'success'); await render(true); }
     else showToast(res?.error || '导入失败', 'error');
@@ -282,9 +325,13 @@ function updateExpiredBanner(accounts) {
   $btnExpiredAction.onclick = async () => {
     const first = expired[0];
     showToast(`切换到「${first.name}」...`, 'info');
-    await sendMsg({ action: 'switchAccount', accountId: first.id });
-    cachedCurrentId = first.id;
-    showToast('请在即梦页面登录后点「保存当前账号」更新', 'info', 5000);
+    const res = await sendMsg({ action: 'switchAccount', accountId: first.id });
+    if (res?.success) {
+      cachedCurrentId = first.id;
+      showToast('请在即梦页面登录后点「保存当前账号」更新', 'info', 5000);
+    } else {
+      showToast(res?.error || '切换失败', 'error', 4000);
+    }
     await render(true);
   };
 }
@@ -304,5 +351,55 @@ chrome.runtime.onMessage.addListener((msg) => {
   }
 });
 
+// ======================== 权限检测（Firefox 特需）========================
+
+const HOST_PATTERN = 'https://*.jianying.com/*';
+const $permBanner = document.getElementById('permission-banner');
+const $btnGrantPerm = document.getElementById('btn-grant-permission');
+
+async function checkHostPermission() {
+  if (!chrome.permissions?.contains) return true; // 老浏览器兜底
+  try {
+    return await chrome.permissions.contains({ origins: [HOST_PATTERN] });
+  } catch { return true; }
+}
+
+async function promptHostPermission() {
+  if (!chrome.permissions?.request) {
+    showToast('当前浏览器不支持权限 API，请在扩展管理页手动启用', 'error');
+    return false;
+  }
+  try {
+    return await chrome.permissions.request({ origins: [HOST_PATTERN] });
+  } catch (e) {
+    showToast(`授权失败: ${e.message}`, 'error');
+    return false;
+  }
+}
+
+async function updatePermissionBanner() {
+  const ok = await checkHostPermission();
+  if (ok) {
+    $permBanner.classList.add('hidden');
+  } else {
+    $permBanner.classList.remove('hidden');
+  }
+  return ok;
+}
+
+$btnGrantPerm?.addEventListener('click', async () => {
+  const granted = await promptHostPermission();
+  if (granted) {
+    showToast('授权成功', 'success');
+    await updatePermissionBanner();
+    await render(true);
+  } else {
+    showToast('授权被拒绝，扩展无法工作', 'error');
+  }
+});
+
 // ======================== 初始化 ========================
-render();
+(async () => {
+  await updatePermissionBanner();
+  render();
+})();

@@ -28,3 +28,4 @@ build/
 *.crx
 *.pem
 .backup-v1.0.0/
+.agent/

@@ -16,6 +16,13 @@
       </div>
     </header>
 
+    <!-- 权限授权横幅（Firefox 下首次需要用户批准 host_permissions） -->
+    <div id="permission-banner" class="expired-banner hidden">
+      <span class="banner-icon">&#9888;</span>
+      <span class="banner-text">扩展需要访问 jianying.com 的权限才能工作</span>
+      <button id="btn-grant-permission" class="btn btn-sm btn-primary">授权</button>
+    </div>
+
     <!-- Session 过期告警横幅 -->
     <div id="expired-banner" class="expired-banner hidden">
       <span class="banner-icon">&#9888;</span>
