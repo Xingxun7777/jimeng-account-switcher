@@ -4,6 +4,36 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.3] - 2026-04-14
+
+补完 Codex R4 的 4 项发现（R4 之前因超时标 N/A，实际结果完成后又发了 v1.4.2 同时跟 Gemini 修）。
+
+### 🔴 区分 auth failure vs transport failure（Codex R4）
+
+v1.4.1 的 `isAuthFailure` 把 `status=0` / `5xx` / `断网` 都当作 auth 失败，上游会把 `sessionValid` 写成 `false` —— **一次即梦服务短时抖动就能把所有账号标红**。v1.4.3：
+- 新增 `isTransportFailure`：网络/5xx/fetch 彻底失败 → "状态未知"
+- `isAuthFailure` 仅保留严格的凭证失效判定（401/403/业务错误码/明确错误消息）
+- `fetchStatusViaSession` 返回 `{ unknown: true }` 标记传输失败
+- `mergeAccountStatus` / `mergeMultipleAccountStatuses` 看到 `unknown=true` 时**不覆盖**现有 `cachedCredits` / `sessionValid`，只更新 `lastChecked`
+
+### 🟡 其他 Codex R4 发现
+
+- **清理 `importedUserId` 残留**：`mergeAccountStatus` 首次回填真实 `userId` 时同时 `delete target.importedUserId`，避免导入残留字段永久留在账号数据里。
+- **导入文件 10MB 上限**：`popup.js` 文件上传前检查 `file.size`，超过拒绝并提示。防止 1GB 异常 JSON 吃爆 popup。
+- **消息路由 rejection handler**：`handler().then(sendResponse, rejectHandler)` 兜底保证 popup 一定收到响应（含错误信息），避免 handler 内部 try/catch 之外的异常被静默 drop。
+
+### 就绪度演进
+
+| Round | 版本 | Codex | Gemini |
+|-------|------|-------|--------|
+| R1 | v1.2.2 | 4/10 | - |
+| R2 | v1.3.0 | 6/10 | 6.5/10 |
+| R3 | v1.4.0 | 6/10 | 3/10（发现致命锁） |
+| R4 | v1.4.1 | 7/10（新发现 4 项） | 3/10（发现致命 manifest 冲突） |
+| **R5 目标** | **v1.4.3** | **预期 8/10** | **预期 8/10** |
+
+目前未修的唯一已知问题：**锁卡死会拖垮整个队列**（Codex 评 中高，Gemini 评为"合理 trade-off"）。这是设计权衡——宁愿死锁也不能在未知状态下并发修改 cookie。改可取消/可中断会让架构复杂度陡增，保持现状作为已知限制。
+
 ## [1.4.2] - 2026-04-14
 
 紧急修复 v1.4.1 的 1 个**致命加载 bug** + 3 个关键问题（Gemini R4 发现）。

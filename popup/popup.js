@@ -337,9 +337,16 @@ function showImportModeDialog(count) {
   });
 }
 
+const MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024; // 10MB 上限（账号 JSON 不可能这么大，防御性保护）
+
 $fileImport.addEventListener('change', async (e) => {
   const file = e.target.files?.[0];
   if (!file) return;
+  if (file.size > MAX_IMPORT_FILE_SIZE) {
+    showToast(`文件过大（${(file.size / 1024 / 1024).toFixed(1)}MB），上限 10MB。请检查文件是否正确`, 'error', 5000);
+    $fileImport.value = '';
+    return;
+  }
   try {
     const payload = JSON.parse(await file.text());
     if (!Array.isArray(payload?.accounts)) { showToast('格式错误：缺少 accounts 数组', 'error'); return; }

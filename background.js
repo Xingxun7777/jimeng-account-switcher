@@ -427,19 +427,24 @@ function extractUserObj(resp) {
   };
 }
 
-function isAuthFailure(resp) {
+// 传输层失败：断网 / tab 关闭 / 5xx 等——这些情况下不能判断 session 是否有效，
+// 应返回到"状态未知"分支，不覆盖现有 cachedCredits/sessionValid。
+function isTransportFailure(resp) {
   if (!resp) return true;
-  // fetch 完全失败（断网/跨域/tab 关闭等）：status=0 且带 error
-  // 这种情况不是确定的未登录，但也不能当作成功，返回 true 让上游按失效处理
-  if (resp.status === 0 || !resp.ok) {
-    if (resp.error) return true;
-    if (resp.status === 401 || resp.status === 403) return true;
-    // 其他非 ok 状态（5xx 等）：保守当作失效
-    if (resp.status >= 500) return true;
-  }
+  if (resp.error) return true; // executeScript 失败
+  if (resp.status === 0) return true; // fetch 完全失败
+  if (resp.status >= 500) return true; // 服务端错误
+  return false;
+}
+
+// 严格的 auth failure：确定性的"已登录凭证失效"（401/403/业务错误码/明确错误消息）。
+// 不包括传输层失败（由 isTransportFailure 单独判断）。
+function isAuthFailure(resp) {
+  if (!resp) return false; // 空响应在 isTransportFailure 那边判
+  if (isTransportFailure(resp)) return false; // 传输失败不算 auth 失败
   if (resp.status === 401 || resp.status === 403) return true;
   const d = resp.data;
-  if (!d) return !resp.ok; // 无 data 且不 ok → 失效
+  if (!d) return false;
   const errno = d.errno ?? d.status_code ?? d.ret;
   if (errno === 10000 || errno === 10001 || errno === 40001) return true;
   const msg = String(d.errmsg || d.message || '').toLowerCase();
@@ -478,10 +483,15 @@ async function detectCurrentAccount() {
   return match ? match.id : null;
 }
 
+// 返回值中的 unknown=true 表示传输失败（网络/5xx），上游不应覆盖现有状态。
 async function fetchStatusViaSession(session) {
-  const result = { valid: false, credits: null, vip: null, user: null };
+  const result = { valid: false, credits: null, vip: null, user: null, unknown: false };
   const infoResp = await session.fetch(API_PATH.userInfo, {}, 'POST');
-  if (isAuthFailure(infoResp)) return result;
+  if (isTransportFailure(infoResp)) {
+    result.unknown = true;
+    return result;
+  }
+  if (isAuthFailure(infoResp)) return result; // valid=false
   result.user = extractUserObj(infoResp?.data);
   result.valid = !!(result.user?.userId);
   if (!result.valid) return result;
@@ -868,10 +878,17 @@ async function mergeAccountStatus(accountId, status) {
     const accounts = await loadAccounts();
     const target = accounts.find(a => a.id === accountId);
     if (!target) return; // 用户中途删除了，不回写
+
+    // 传输失败（网络抖动/5xx）：不覆盖现有状态，只更新 lastChecked
+    if (status?.unknown) {
+      target.lastChecked = Date.now();
+      await saveAccountsToStorage(accounts);
+      return;
+    }
+
     // 身份断言：状态里的 userId 必须匹配目标账号，避免 cookie 串号把 A 的状态写到 B
     if (!assertUserIdMatch(target, status)) {
       console.warn(`[即梦切换器] userId 不匹配，拒绝 merge 状态到账号 ${target.name}（${target.userId} vs ${status?.user?.userId}）`);
-      // 仍然把 sessionValid 标记为 false（这个账号的状态查询失败）
       target.sessionValid = false;
       target.lastChecked = Date.now();
       await saveAccountsToStorage(accounts);
@@ -881,9 +898,10 @@ async function mergeAccountStatus(accountId, status) {
     target.cachedVip = status.vip;
     target.sessionValid = status.valid;
     target.lastChecked = Date.now();
-    // 如果该账号还没有 userId（旧版保存），且本次拿到了真实 userId，就回填
+    // 首次拿到真实 userId 时回填，并清理导入残留的 importedUserId
     if (!target.userId && status.user?.userId) {
       target.userId = String(status.user.userId);
+      delete target.importedUserId;
     }
     await saveAccountsToStorage(accounts);
   });
@@ -900,6 +918,14 @@ async function mergeMultipleAccountStatuses(statusById) {
     for (const acc of accounts) {
       if (!statusById.has(acc.id)) continue;
       const status = statusById.get(acc.id);
+
+      // 传输失败：不覆盖现有状态
+      if (status?.unknown) {
+        acc.lastChecked = now;
+        changed = true;
+        continue;
+      }
+
       if (!assertUserIdMatch(acc, status)) {
         console.warn(`[即梦切换器] 批量 merge: ${acc.name} userId 不匹配，跳过状态写入`);
         acc.sessionValid = false;
@@ -913,6 +939,7 @@ async function mergeMultipleAccountStatuses(statusById) {
       acc.lastChecked = now;
       if (!acc.userId && status.user?.userId) {
         acc.userId = String(status.user.userId);
+        delete acc.importedUserId;
       }
       changed = true;
     }
@@ -1070,6 +1097,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return { success: false, error: e.message };
     }
   };
-  handler().then(sendResponse);
+  // 补 rejection handler：handler 虽然自己 try/catch，但边界脆弱，加一层兜底保证 popup 一定收到响应
+  handler().then(
+    sendResponse,
+    (e) => {
+      console.error('[即梦切换器] 消息路由未捕获异常:', e);
+      try { sendResponse({ success: false, error: String(e?.message || e) }); } catch {}
+    }
+  );
   return true;
 });
