@@ -4,6 +4,19 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.2.2] - 2026-04-14
+
+### Added
+
+- **完整的多浏览器安装指南 `INSTALL.md`**：覆盖 Chrome / Edge / Brave / Opera / Vivaldi / Arc / 360 极速 / QQ 浏览器 / 搜狗 / Yandex / Firefox 128+（3 种方式）/ Kiwi (Android) 全部主流浏览器的分步详细安装说明。
+- 每个浏览器单独列出扩展页 URL、开发者模式开关位置、加载按钮中英文名、特殊注意事项。
+- 附 2025-2026 浏览器扩展政策变更说明（MV2 停用、Chrome 137 CLI 标志移除等）。
+- 常见问题 FAQ（Chrome 开发者模式警告、扩展图标失效、跨设备迁移账号等）。
+
+### Changed
+
+- README 的安装段落改为跳转到 `INSTALL.md`，提供速览信息，避免两处维护。
+
 ## [1.2.1] - 2026-04-14
 
 ### Added

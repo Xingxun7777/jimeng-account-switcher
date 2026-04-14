@@ -22,40 +22,21 @@
 
 ## 📦 安装方式
 
-> 本扩展未上架任何应用商店，需要以「开发者模式」加载。
+**👉 完整安装指南见 [INSTALL.md](./INSTALL.md)**
 
-### 1. 下载源码
+覆盖所有主流浏览器（Chrome / Edge / Brave / Opera / Vivaldi / Arc / 360 / QQ / 搜狗 / Yandex / Firefox / Kiwi Android 等）的分步详细步骤、常见坑位、2025-2026 政策变更说明。
+
+### 速览
 
 ```bash
 git clone https://github.com/Xingxun7777/jimeng-account-switcher.git
 ```
 
-或在仓库主页点击 **Code → Download ZIP** 下载并解压。
+- **Chromium 系（Chrome/Edge/Brave 等）**：扩展管理页 → 开发者模式 → 加载已解压 → 选源码文件夹
+- **Firefox 128+**：`about:debugging#/runtime/this-firefox` → 临时载入附加组件 → 选 `manifest.json`
+- **Edge 用户注意**：开发者模式开关在**左下角**，不是右上角
 
-### 2. 根据你的浏览器选择安装方式
-
-#### Chrome / Edge / Brave / Opera / Vivaldi / Arc / 360 极速 / QQ 浏览器 等 Chromium 系
-
-1. 打开扩展管理页：
-   - Chrome：`chrome://extensions/`
-   - Edge：`edge://extensions/`
-   - Brave：`brave://extensions/`
-   - 其他 Chromium 系浏览器类似
-2. 开启页面右上角的「开发者模式」开关
-3. 点击「加载已解压的扩展程序」（Load unpacked）
-4. 选择本仓库根目录（含 `manifest.json` 的文件夹）
-
-#### Firefox 128+
-
-1. 地址栏访问 `about:debugging#/runtime/this-firefox`
-2. 点击「临时载入附加组件」（Load Temporary Add-on）
-3. 选择仓库根目录下的 `manifest.json`
-
-> ⚠️ Firefox 临时加载的扩展每次重启浏览器都会消失。如需长期使用，需自行对扩展打包签名或安装 Firefox Developer Edition。
-
-### 3. 固定到工具栏
-
-安装完成后，工具栏会出现「即梦账号管理」图标，建议点击拼图图标将其固定显示。
+⚠️ 源码文件夹**不要放在桌面**或会被清理的位置，扩展会持续引用这个路径。
 
 ---
 
