@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "即梦账号切换器",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "即梦多账号快速切换、积分/VIP 状态查看、Session 过期告警、账号导入导出",
   "permissions": [
     "cookies",
@@ -17,5 +17,11 @@
   },
   "action": {
     "default_popup": "popup/popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "jimeng-account-switcher@xingxun.local",
+      "strict_min_version": "128.0"
+    }
   }
 }

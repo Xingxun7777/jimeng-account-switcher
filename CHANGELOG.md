@@ -4,6 +4,36 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-04-14
+
+### Added
+
+- **Firefox 128+ 兼容**：manifest 增加 `browser_specific_settings.gecko` 字段，可直接通过 `about:debugging` 临时加载运行。
+- README 增加多浏览器兼容表与分浏览器安装说明（Chrome / Edge / Brave / Opera / Vivaldi / Arc / 360 / QQ / Firefox）。
+
+## [1.2.0] - 2026-04-14
+
+### Changed
+
+- **重大精简**：移除所有积分领取功能（即梦免费积分登录即自动领取，次日过期，无需囤积），扩展定位回归核心——快速账号切换器。
+- 代码从 1066+400 行精简至 497+308 行。
+
+### Removed
+
+- 一键领取全部积分按钮、单账号领取按钮、`claimAll` / `claimOne` / `claimForAccountViaSession` 等所有 claim 相关函数。
+- MD5 签名算法、`directApiRequest`、`claimCreditsDirect`、`getCreditsDirect` 等 service worker 直接 API 调用链。
+- 定时自动领取（`chrome.alarms`）及相关 UI、权限声明。
+- 切换账号后的自动领取逻辑。
+- DOM 按钮点击兜底方案（`clickClaimButtons`）。
+- Popup 打开时的 `autoRefresh` 触发（避免后台 cookie 轮换干扰用户正在浏览的即梦页面——这是 v1.1.x 频繁切换账号 bug 的根源）。
+
+### Fixed
+
+- **频繁切换账号 bug**：根因是 `checkAllStatuses` 在后台轮换 cookie 时每个账号都 flush storage，触发 popup 的 `storage.onChanged` → `render` → `detectCurrent` 读到中间状态的 cookie。修复：
+  - `checkAllStatuses` 改为最后一次性保存，不再每账号 flush。
+  - Popup 缓存 `cachedCurrentId`，被动 re-render（storage 监听）不重新探测 current，杜绝 UI 闪烁。
+  - 「刷新状态」前弹确认框，明确提示用户过程中别操作即梦页面。
+
 ## [1.1.0] - 2026-04-12
 
 ### Changed
