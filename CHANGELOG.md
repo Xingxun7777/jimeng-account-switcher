@@ -4,6 +4,52 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-04-14
+
+v1.3.0 经第二轮三方代码审查（Codex + Gemini）发现 **15+ 个 v1.3.0 引入或遗漏的严重问题**，本次全部修复。审查就绪度从 6/10 → 预期 8+/10。
+
+### 🔴 修复 v1.3.0 引入的回归
+
+- **Pending Restore 缺阶段标记的致命 bug**：v1.3.0 的 `_pendingRestore` 只记录 cookie 快照，如果崩在"切换成功但未清 pending"的窗口内，下次启动会**反向恢复**这次成功的切换。v1.4.0 引入三阶段状态机（`armed` → `business` → `committing`），只在 armed/business 状态恢复。
+- **Pending Restore 只挂 onStartup/onInstalled**：MV3 SW 空闲挂起后被消息唤醒的场景这两个事件都不触发。v1.4.0 新增 `maybeRecoverOnWakeup`，每次消息路由入口懒触发检查（30s 节流）。
+- **Pending Restore 不检查 restoreCookies 返回值**：恢复失败也清标记，用户永远失去恢复机会。v1.4.0 检查 `success/authFailed`，失败保留 pending + 最多 3 次重试。
+- **tryRecoverPendingRestore 无锁**：`onStartup + onInstalled` 并发触发两份恢复任务。v1.4.0 用 `recoveryPromise` 单例 + `withCookieLock` 保护。
+- **`sanitizeCookie` 正则可绕过**：`/\.?jianying\.com$/i` 缺 `^` 锚点，`eviljianying.com` 能过。v1.4.0 改为严格比较 `c.domain === 'jianying.com' || c.domain.endsWith('.jianying.com')`。
+- **Storage TOCTOU**：v1.3.0 只有 cookieLock，没有 storage 锁，`checkAllStatuses` 等待网络时用户的 delete/rename/import 会被后台 save 覆盖（"僵尸账号复活"）。v1.4.0 新增 `withStorageLock`，所有改 accounts 的操作串行。
+- **`mergeAccountStatus` TOCTOU**：load 和 save 之间 rename/import 仍可插入。v1.4.0 内部显式获取 storageLock。
+
+### 🔴 修复 v1.0-v1.3 一直漏掉的问题
+
+- **`verifySession` 太弱**：只检查 sessionid cookie 存在，cookie 在但失效会被判成功。v1.4.0 升级为真实 userId 校验——切换后调 userInfo API，返回的 userId 必须与目标账号匹配，否则触发回滚。
+- **Host-only cookie 作用域被放宽**：`restoreCookies` 恢复时始终显式传 `domain`，host-only cookie 被转为 domain cookie。v1.4.0 检查 `cookie.hostOnly === true` 时不传 domain，让浏览器从 URL 推断。
+- **`restoreCookies` 返回值大多被忽略**：`withAccountCookies` / check\* finally / 回滚路径都没消费 success/authFailed。v1.4.0 全链路消费，恢复失败保留 pending 不 committing。
+- **Cookie 过期时间未前置校验**：导入老 JSON 或回滚旧快照时，过期 cookie 写入浏览器立即被丢，但上层判成功。v1.4.0 `sanitizeCookie` 过滤 `expirationDate < now`。
+- **多窗口 reload 歧义**：`tab.active` 是每窗口一个 active，多窗口都会被 reload。v1.4.0 按 `windowId` 分组，每窗口只 reload 一个 active tab。
+- **导入去重 bySid 过时**：JSON 文件内重复 sessionid 仍被重复插入。v1.4.0 新增条目也同步更新 bySid。
+
+### 🟡 其他改进
+
+- **锁 timeout 兜底**：`withCookieLock` / `withStorageLock` 加 30s 超时，避免某任务卡死导致全局饥饿。
+- **Firefox 权限拒绝后禁用功能按钮**：旧版按钮仍可点但全部报错，UI 看起来能用实则不工作。v1.4.0 检测到无权限时 disable 所有操作按钮，只留"授权"按钮可点。
+- **`checkHostPermission` 不吞异常**：旧版 catch 返回 true，真实故障被隐藏。v1.4.0 返回 `granted | denied | unsupported | error` 四种明确状态。
+- **Popup render 正确处理通信失败**：旧版 sendMsg 失败会让 render 误判"无账号"，显示空状态。v1.4.0 检测 `__sendMsgError` 显示明确错误态 + 重试按钮。
+- **Shadow DOM 隔离 toast**：切换账号时注入到非 active tab 的提示改用 Shadow DOM，避免被页面全局 CSS 污染。
+- **导入对话框键盘支持**：Esc 取消、Enter 默认合并。
+
+### 📝 文档
+
+- README 删除"auth cookie 失败时降级 HTTP 重试"等过时描述
+- README 修正权限表（`*://` → `https://`）
+- 补充双锁机制、阶段化 Pending Restore、userId 深度校验的说明
+
+### 第二轮三方审查贡献
+
+| AI | 关键发现 |
+|---|---|
+| Codex | Pending Restore 阶段标记缺失（致命）、storage 并发未统一、verifySession 太弱、hostOnly 被放宽、restoreCookies 返回值不消费、tab.active 多窗口歧义、Firefox 权限拒绝 UI 降级不完整、checkHostPermission 吞异常、导入 bySid 过时、文档回归 |
+| Gemini | sanitizeCookie 正则绕过、mergeAccountStatus TOCTOU、tryRecoverPendingRestore 无锁、Cookie 过期校验缺失 |
+| Claude | withCookieLock timeout、Shadow DOM toast、Modal 键盘 |
+
 ## [1.3.0] - 2026-04-14
 
 本次版本经过 Claude + Codex + Gemini 三方代码审查，共修复 **19 项** 问题（11 项 P0 阻塞级 + 8 项 P1 推荐级），显著提升安全性、正确性、用户体验。

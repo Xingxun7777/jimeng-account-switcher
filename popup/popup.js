@@ -76,13 +76,30 @@ function formatVipExpiry(ts) {
 // ======================== 渲染 ========================
 
 async function render(detectCurrent = true) {
-  const accounts = await sendMsg({ action: 'getAccounts' });
+  const resp = await sendMsg({ action: 'getAccounts' });
+
+  // 通信失败（background SW 挂了或其他异常）→ 显示错误态，不是"无账号"
+  if (resp?.__sendMsgError) {
+    $list.innerHTML = `
+      <div class="empty-state">
+        <p style="color:#c00">⚠ 与扩展后台通信失败</p>
+        <p class="hint">${escapeHtml(resp.error || '')}</p>
+        <p class="hint"><button id="btn-retry-connect" class="btn btn-sm btn-outline" style="margin-top:8px">重试</button></p>
+      </div>`;
+    document.getElementById('btn-retry-connect')?.addEventListener('click', () => render(true));
+    $summaryBar.classList.add('hidden');
+    $expiredBanner.classList.add('hidden');
+    return;
+  }
+
+  const accounts = Array.isArray(resp) ? resp : [];
   if (detectCurrent || cachedCurrentId === null) {
-    cachedCurrentId = await sendMsg({ action: 'detectCurrent' });
+    const detectResp = await sendMsg({ action: 'detectCurrent' });
+    cachedCurrentId = detectResp?.__sendMsgError ? cachedCurrentId : detectResp;
   }
   const currentId = cachedCurrentId;
 
-  if (!accounts || !accounts.length) {
+  if (!accounts.length) {
     $list.innerHTML = `
       <div class="empty-state">
         <p>还没有保存的账号</p>
@@ -274,6 +291,7 @@ $btnExport.addEventListener('click', async () => {
 $btnImport.addEventListener('click', () => $fileImport.click());
 
 // 三选一自定义对话框：Promise<'merge'|'replace'|null>
+// 键盘支持：Esc 取消、Enter 默认选合并
 function showImportModeDialog(count) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
@@ -283,20 +301,35 @@ function showImportModeDialog(count) {
         <div class="modal-title">导入账号</div>
         <div class="modal-body">
           检测到 <b>${count}</b> 个账号。<br>
-          请选择导入模式：
+          请选择导入模式：<br>
+          <span style="color:#999;font-size:11px">Enter=合并 · Esc=取消</span>
         </div>
         <div class="modal-actions">
           <button class="btn btn-sm btn-outline" data-mode="cancel">取消</button>
           <button class="btn btn-sm btn-outline" data-mode="replace">覆盖（清空现有）</button>
-          <button class="btn btn-sm btn-primary" data-mode="merge">合并（保留现有）</button>
+          <button class="btn btn-sm btn-primary" data-mode="merge" autofocus>合并（保留现有）</button>
         </div>
       </div>`;
     document.body.appendChild(overlay);
-    const pick = (mode) => { overlay.remove(); resolve(mode === 'cancel' ? null : mode); };
+    let resolved = false;
+    const pick = (mode) => {
+      if (resolved) return;
+      resolved = true;
+      document.removeEventListener('keydown', onKeydown);
+      overlay.remove();
+      resolve(mode === 'cancel' ? null : mode);
+    };
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); pick('cancel'); }
+      else if (e.key === 'Enter') { e.preventDefault(); pick('merge'); }
+    };
     overlay.querySelectorAll('button[data-mode]').forEach(b => {
       b.addEventListener('click', () => pick(b.dataset.mode));
     });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) pick('cancel'); });
+    document.addEventListener('keydown', onKeydown);
+    // 默认聚焦合并按钮（autofocus 在某些 Chrome 不生效）
+    setTimeout(() => overlay.querySelector('[data-mode=merge]')?.focus(), 0);
   });
 }
 
@@ -357,11 +390,16 @@ const HOST_PATTERN = 'https://*.jianying.com/*';
 const $permBanner = document.getElementById('permission-banner');
 const $btnGrantPerm = document.getElementById('btn-grant-permission');
 
+// 返回 'granted' | 'denied' | 'unsupported' | 'error'
 async function checkHostPermission() {
-  if (!chrome.permissions?.contains) return true; // 老浏览器兜底
+  if (!chrome.permissions?.contains) return 'unsupported'; // 老浏览器兜底（Chromium 默认授权）
   try {
-    return await chrome.permissions.contains({ origins: [HOST_PATTERN] });
-  } catch { return true; }
+    const has = await chrome.permissions.contains({ origins: [HOST_PATTERN] });
+    return has ? 'granted' : 'denied';
+  } catch (e) {
+    console.error('[即梦] permissions.contains 异常:', e);
+    return 'error';
+  }
 }
 
 async function promptHostPermission() {
@@ -377,14 +415,37 @@ async function promptHostPermission() {
   }
 }
 
-async function updatePermissionBanner() {
-  const ok = await checkHostPermission();
-  if (ok) {
-    $permBanner.classList.add('hidden');
-  } else {
-    $permBanner.classList.remove('hidden');
+// 权限不足时禁用所有功能按钮，只留权限横幅的"授权"按钮
+function setFunctionalButtonsEnabled(enabled) {
+  const ids = ['btn-save', 'btn-check-all', 'btn-toggle-settings', 'btn-export', 'btn-import'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !enabled;
   }
-  return ok;
+  // 账号卡片里的切换/删除按钮 disabled 状态由 render 时的 isCurrent 控制，
+  // 全局权限态也要覆盖：无权限时全部禁用
+  document.querySelectorAll('#account-list button[data-action]').forEach(b => {
+    if (!enabled) b.disabled = true;
+  });
+}
+
+async function updatePermissionBanner() {
+  const state = await checkHostPermission();
+  if (state === 'granted' || state === 'unsupported') {
+    $permBanner.classList.add('hidden');
+    setFunctionalButtonsEnabled(true);
+    return true;
+  }
+  // denied 或 error：显示横幅 + 禁用功能
+  $permBanner.classList.remove('hidden');
+  const textEl = $permBanner.querySelector('.banner-text');
+  if (textEl) {
+    textEl.textContent = state === 'error'
+      ? '权限 API 异常，请重启浏览器或检查扩展是否完整安装'
+      : '扩展需要访问 jianying.com 的权限才能工作';
+  }
+  setFunctionalButtonsEnabled(false);
+  return false;
 }
 
 $btnGrantPerm?.addEventListener('click', async () => {

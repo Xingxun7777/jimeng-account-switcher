@@ -71,22 +71,25 @@ jimeng-account-switcher/
 ### 架构
 - **Manifest V3** service worker + popup 结构
 - 所有 API 调用通过 `chrome.scripting.executeScript` + `world: 'MAIN'` 在即梦页面上下文内执行，由页面自身补全签名、指纹、referer，避开服务端风控
-- 需要隔离的 Cookie 操作使用互斥锁（`withCookieLock`）串行执行
+- **双重互斥锁**：cookie store（`withCookieLock`）+ account storage（`withStorageLock`）独立串行，避免读-改-写竞争
+- **崩溃恢复**：批量操作前把原 cookie 快照以阶段化状态（armed / business / committing）持久化到 `storage.local`；Service Worker 启动 + 消息唤醒时自动检测并恢复，避免意外终止丢失用户登录态
 
 ### 权限
 | 权限 | 用途 |
 |------|------|
-| `cookies` | 读取/写入/删除 `*.jianying.com` 域 Cookie |
+| `cookies` | 读取/写入/删除 `.jianying.com` 域 Cookie |
 | `storage` | 在 `chrome.storage.local` 中保存账号列表（明文仅在本地） |
 | `tabs` | 查询并刷新即梦标签页 |
 | `scripting` | 注入脚本清理页面 `localStorage` 缓存、在页面上下文发起 API 请求 |
-| `host_permissions: *://*.jianying.com/*` | 访问即梦相关接口 |
+| `host_permissions: https://*.jianying.com/*` | 访问即梦相关接口（仅 HTTPS，不允许明文 HTTP） |
 
 ### 切换账号的健壮性
 - 同时查询 `.jianying.com` 与 `jimeng.jianying.com` 两个域，去重后统一删除，避免协议或域名差异造成残留
-- 写入时按「普通 Cookie → 关键 auth Cookie（`sessionid` / `sid_tt` / `sid_guard` / ...）」的顺序，关键 Cookie 写失败时降级为 HTTP 协议重试
-- 切换完成后调用 `chrome.cookies.get` 校验 `sessionid` 是否成功落地，未成功则自动重试一次
+- 写入时按「普通 Cookie → 关键 auth Cookie（`sessionid` / `sid_tt` / `sid_guard` / ...）」的顺序；仅允许 HTTPS+secure 写入（**不降级** HTTP，防止凭证明文暴露）
+- 切换完成后调用真实 userInfo API 校验，返回的 `userId` 必须与目标账号匹配——仅 cookie 存在但 session 失效的情况也会触发回滚
 - 切换前注入脚本清理 `passport / token / user_status / __tea_cache_tokens` 等 `localStorage` 键，并清空 `sessionStorage`，避免页面缓存了上一个账号的状态
+- **失败自动回滚**：任何阶段失败（cookie 写入/session 校验）都会回滚到原账号快照；回滚本身也失败时保留 pending，下次启动再试（最多 3 次）
+- **Host-only cookie 正确处理**：host-only cookie 不传 `domain` 字段，由浏览器从 URL 推断，避免作用域被放宽为 domain cookie
 
 ---
 

@@ -28,55 +28,153 @@ async function broadcastProgress(payload) {
   } catch {}
 }
 
-// ======================== Cookie 互斥锁 ========================
-// 所有会操作全局 cookie store 的任务必须串行，防止并发覆盖。
-// 前一个任务无论成功或失败（.then(fn, fn) 的双参形式），后续任务都继续执行，
-// 避免一次失败把整条链卡死。注意 fn 必须是无参箭头函数（不接收 promise value）。
-let cookieLock = Promise.resolve();
-function withCookieLock(fn) {
-  const run = cookieLock.then(() => fn(), () => fn());
-  cookieLock = run.catch(() => {});
-  return run;
+// ======================== 互斥锁 ========================
+// Cookie 锁：保护全局 cookie store 的读写不被并发覆盖
+// Storage 锁：保护 accounts/settings 的 read-modify-write 事务
+// 两者独立，因为状态查询流程需要同时持有两把锁，但锁定范围不同。
+//
+// .then(fn, fn) 双参形式：无论前一个 task 成功或失败，下一个都继续执行，
+// 避免一次失败把整条链卡死。fn 必须是无参箭头函数（不接收 promise value）。
+//
+// 加 LOCK_TIMEOUT_MS 兜底：单任务超时自动 reject，避免永久挂起。
+const LOCK_TIMEOUT_MS = 30000;
+
+function makeLock() {
+  let chain = Promise.resolve();
+  return function withLock(fn) {
+    const gated = chain.then(() => fn(), () => fn());
+    // 加 timeout 兜底
+    const timedOut = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(`lock timeout (${LOCK_TIMEOUT_MS}ms)`)), LOCK_TIMEOUT_MS);
+    });
+    const run = Promise.race([gated, timedOut]);
+    // 链条始终 resolve，不管 race 结果如何
+    chain = run.catch(() => {});
+    return run;
+  };
 }
 
-// ======================== Pending Restore（SW 崩溃防护）========================
-// 开始批量操作前把原始 cookie 快照持久化，结束时清除。
-// 下次 SW 启动/安装时若发现有残留 → 说明上次异常终止 → 自动恢复。
-const PENDING_RESTORE_KEY = '__pending_cookie_restore';
+const withCookieLock = makeLock();
+const withStorageLock = makeLock();
 
-async function persistPendingRestore(snapshot) {
+// ======================== Pending Restore 阶段化状态机（SW 崩溃防护）========================
+// 三阶段状态，防止"成功切换但未清标记"窗口内崩溃导致下次启动反向恢复：
+//   armed      : 刚备份 snapshot，业务未开始 → 崩溃时应恢复
+//   business   : 业务执行中                → 崩溃时应恢复（同 armed）
+//   committing : 业务已成功完成，准备清标记 → 崩溃时**不恢复**（避免回滚成功切换）
+//
+// tryRecover 仅在 armed/business 状态才真正恢复，committing 状态直接清除标记。
+// 恢复前检查 restoreCookies 的返回值，失败时保留 pending 让下次启动再试（最多 3 次）。
+const PENDING_RESTORE_KEY = '__pending_cookie_restore';
+const MAX_RECOVERY_ATTEMPTS = 3;
+
+async function persistPendingRestore(snapshot, stage = 'armed') {
   try {
-    await chrome.storage.local.set({ [PENDING_RESTORE_KEY]: { cookies: snapshot, ts: Date.now() } });
+    const existing = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+    await chrome.storage.local.set({
+      [PENDING_RESTORE_KEY]: {
+        cookies: snapshot,
+        stage,
+        ts: Date.now(),
+        attempts: existing?.attempts || 0,
+      },
+    });
   } catch (e) {
     console.warn('[即梦切换器] 持久化 pending restore 失败:', e);
   }
+}
+
+async function markPendingStage(stage) {
+  try {
+    const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+    const pending = r[PENDING_RESTORE_KEY];
+    if (!pending) return;
+    pending.stage = stage;
+    pending.ts = Date.now();
+    await chrome.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
+  } catch {}
 }
 
 async function clearPendingRestore() {
   try { await chrome.storage.local.remove(PENDING_RESTORE_KEY); } catch {}
 }
 
+// 防止 onStartup 和 onInstalled 并发触发两份恢复任务
+let recoveryPromise = null;
+
 async function tryRecoverPendingRestore() {
-  try {
-    const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
-    const pending = r[PENDING_RESTORE_KEY];
-    if (!pending?.cookies?.length) return;
-    // 只恢复 1 小时内的快照（太旧可能已无意义）
-    if (Date.now() - (pending.ts || 0) > 60 * 60 * 1000) {
-      await clearPendingRestore();
-      return;
+  if (recoveryPromise) return recoveryPromise;
+  recoveryPromise = (async () => {
+    try {
+      const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+      const pending = r[PENDING_RESTORE_KEY];
+      if (!pending?.cookies?.length) return;
+
+      // committing 状态：业务已成功，不恢复，直接清
+      if (pending.stage === 'committing') {
+        console.log('[即梦切换器] 清理已提交的 pending（不恢复）');
+        await clearPendingRestore();
+        return;
+      }
+
+      // 超出尝试次数
+      const attempts = (pending.attempts || 0) + 1;
+      if (attempts > MAX_RECOVERY_ATTEMPTS) {
+        console.warn('[即梦切换器] pending 恢复尝试超限，放弃');
+        await clearPendingRestore();
+        return;
+      }
+
+      // 超过 1 小时也不恢复
+      if (Date.now() - (pending.ts || 0) > 60 * 60 * 1000) {
+        await clearPendingRestore();
+        return;
+      }
+
+      // 必须在 cookieLock 下执行，防止和用户操作并发
+      await withCookieLock(async () => {
+        console.warn(`[即梦切换器] 检测到上次异常终止（stage=${pending.stage}），尝试第 ${attempts} 次恢复...`);
+        // 先更新 attempts 计数，即使恢复失败也不丢信息
+        pending.attempts = attempts;
+        await chrome.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
+
+        await clearDomainCookies();
+        const res = await restoreCookies(pending.cookies);
+        if (!res.success) {
+          // 恢复失败：保留 pending，下次再试
+          console.error(`[即梦切换器] 恢复失败（authFailed=${res.authFailed}），保留 pending`);
+          return;
+        }
+        // 恢复成功，清除
+        await clearPendingRestore();
+        console.log('[即梦切换器] 恢复成功');
+      });
+    } catch (e) {
+      console.error('[即梦切换器] 自动恢复流程异常:', e);
+    } finally {
+      recoveryPromise = null;
     }
-    console.warn('[即梦切换器] 检测到上次批量操作异常终止，正在恢复原 cookie...');
-    await clearDomainCookies();
-    await restoreCookies(pending.cookies);
-    await clearPendingRestore();
-  } catch (e) {
-    console.error('[即梦切换器] 自动恢复失败:', e);
-  }
+  })();
+  return recoveryPromise;
 }
 
 chrome.runtime.onStartup.addListener(() => { tryRecoverPendingRestore(); });
 chrome.runtime.onInstalled.addListener(() => { tryRecoverPendingRestore(); });
+
+// 每次敏感操作入口（经由消息路由）也懒触发一次检查，
+// 应对 MV3 SW 空闲挂起后被消息唤醒的场景（onStartup/onInstalled 都不会触发）。
+let lastRecoveryCheckTs = 0;
+async function maybeRecoverOnWakeup() {
+  // 节流：同一次 SW 生命周期内每 30 秒最多检查一次
+  if (Date.now() - lastRecoveryCheckTs < 30000) return;
+  lastRecoveryCheckTs = Date.now();
+  try {
+    const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+    if (r[PENDING_RESTORE_KEY]?.cookies?.length) {
+      await tryRecoverPendingRestore();
+    }
+  } catch {}
+}
 
 // ======================== Cookie 操作 ========================
 
@@ -121,9 +219,14 @@ async function restoreCookies(savedCookies) {
     const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
     const details = {
       url: `https://${domain}${cookie.path}`,
-      name: cookie.name, value: cookie.value, domain: cookie.domain,
+      name: cookie.name, value: cookie.value,
       path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
     };
+    // host-only cookie 不传 domain（浏览器从 url 推断为 host-only）
+    // 否则 chrome.cookies.set 拿到 domain 会把它转为 domain cookie，作用域被放宽
+    if (cookie.hostOnly !== true) {
+      details.domain = cookie.domain;
+    }
     if (cookie.sameSite && cookie.sameSite !== 'unspecified') {
       details.sameSite = cookie.sameSite;
       if (cookie.sameSite === 'no_restriction') details.secure = true;
@@ -152,9 +255,39 @@ async function restoreCookies(savedCookies) {
   };
 }
 
-async function verifySession() {
+// 两级校验：
+//   浅层：只确认 sessionid cookie 存在（快，用于批量场景）
+//   深层：创建临时 tab 调 userInfo API，验证返回的 userId 匹配目标账号（慢，用于切换）
+//
+// expectedAccount: 可选，传入后做深层校验（要求 API 返回的 userId 与该账号保存的 userId 一致）
+async function verifySession(expectedAccount = null) {
   const sid = await chrome.cookies.get({ url: 'https://jimeng.jianying.com/', name: 'sessionid' });
-  return !!(sid && sid.value);
+  if (!sid?.value) return false;
+
+  // 无目标账号 → 浅层校验够
+  if (!expectedAccount || !expectedAccount.userId) return true;
+
+  // 深层校验：用 TabSession 调 userInfo，匹配 userId
+  // 只有保存过 userId 的账号才能做深层校验（旧版保存的账号可能没有 userId）
+  const session = new JimengTabSession();
+  try {
+    await session.ensure();
+    const resp = await session.fetch(API_PATH.userInfo, {}, 'POST');
+    if (isAuthFailure(resp)) return false;
+    const user = extractUserObj(resp?.data);
+    const actualId = user?.userId;
+    if (!actualId) return false;
+    if (String(actualId) !== String(expectedAccount.userId)) {
+      console.warn(`[即梦切换器] session userId 不匹配: 期望 ${expectedAccount.userId}, 实际 ${actualId}`);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[即梦切换器] 深层 verifySession 失败:', e);
+    return false;
+  } finally {
+    await session.cleanup();
+  }
 }
 
 function serializeCookies(cookies) {
@@ -382,88 +515,135 @@ async function switchAccount(accountId) {
   const target = accounts.find(a => a.id === accountId);
   if (!target) return { success: false, error: '账号不存在' };
 
-  // 快照原 cookie，失败时回滚
   const snapshot = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(snapshot);
+  await persistPendingRestore(snapshot, 'armed');
 
   const tryRestore = async () => {
     await clearDomainCookies();
     await new Promise(r => setTimeout(r, 100));
-    const restoreResult = await restoreCookies(target.cookies);
+    const rr = await restoreCookies(target.cookies);
     await new Promise(r => setTimeout(r, COOKIE_APPLY_DELAY_MS));
-    return restoreResult;
+    return rr;
+  };
+
+  // 回滚：尝试恢复 snapshot，消费返回值决定是否保留 pending
+  const rollback = async (reason) => {
+    console.warn(`[即梦切换器] switchAccount 回滚: ${reason}`);
+    try {
+      await clearDomainCookies();
+      if (snapshot.length > 0) {
+        const restoreRes = await restoreCookies(snapshot);
+        if (!restoreRes.success) {
+          // 回滚也失败：保留 pending（让下次启动再试），不清除
+          console.error('[即梦切换器] 回滚部分失败，保留 pending');
+          return { rolledBack: 'partial', restoreFailures: restoreRes.failures };
+        }
+      }
+    } catch (e) {
+      console.error('[即梦切换器] 回滚异常:', e);
+      return { rolledBack: 'error' };
+    }
+    // 回滚成功，清 pending
+    await clearPendingRestore();
+    return { rolledBack: 'full' };
   };
 
   try {
+    await markPendingStage('business');
     let r = await tryRestore();
-    if (r.authFailed || !(await verifySession())) {
+
+    // 第一次失败 → 重试一次
+    if (r.authFailed || !(await verifySession(target))) {
       console.warn('[即梦切换器] 首次切换失败，重试一次');
       r = await tryRestore();
-      if (r.authFailed || !(await verifySession())) {
-        // 彻底失败，回滚原 cookie
-        await clearDomainCookies();
-        if (snapshot.length > 0) await restoreCookies(snapshot);
-        await clearPendingRestore();
-        return {
-          success: false,
-          error: 'Cookie 恢复失败，已回滚到原账号。请重新保存该账号的 cookie。',
-          rolledBack: true,
-        };
-      }
     }
 
-    // 切换成功：P1-13 只 reload 当前激活的 jimeng tab，其他 tab 注入提示
-    const tabs = await chrome.tabs.query({ url: '*://*.jianying.com/*' });
-    if (tabs.length > 0) {
-      for (const tab of tabs) {
-        if (tab.active) {
-          await clearJimengLocalStorage(tab.id);
-          try { await chrome.tabs.reload(tab.id, { bypassCache: true }); } catch {}
-        } else {
-          // 非 active tab 只注入非阻塞提示，不强制 reload，保留用户未保存工作
-          await notifyTabAccountSwitched(tab.id, target.name);
-        }
-      }
-    } else {
-      try { await chrome.tabs.create({ url: JIMENG_HOME }); } catch {}
+    // 两次都失败 → 回滚
+    if (r.authFailed || !(await verifySession(target))) {
+      const rb = await rollback('两次尝试后 session 仍无效');
+      return {
+        success: false,
+        error: rb.rolledBack === 'full'
+          ? 'Cookie 恢复失败，已回滚到原账号。请重新保存该账号的 cookie。'
+          : 'Cookie 恢复失败，回滚也未完全成功，请手动重新登录即梦。',
+        rolledBack: rb.rolledBack,
+      };
     }
 
+    // reload tabs（多窗口处理见 reloadJimengTabsForSwitch）
+    await reloadJimengTabsForSwitch(target.name);
+
+    // 提交：先标 committing 再清除 pending。
+    // 即使崩在 markPendingStage 和 clearPendingRestore 之间，下次启动也不会误回滚。
+    await markPendingStage('committing');
     await clearPendingRestore();
     return { success: true, account: target };
   } catch (e) {
-    // 异常路径：尝试回滚
-    console.error('[即梦切换器] switchAccount 异常，尝试回滚:', e);
-    try {
-      await clearDomainCookies();
-      if (snapshot.length > 0) await restoreCookies(snapshot);
-    } catch {}
-    await clearPendingRestore();
-    return { success: false, error: `切换失败: ${e.message}`, rolledBack: true };
+    console.error('[即梦切换器] switchAccount 异常:', e);
+    const rb = await rollback(`异常: ${e.message}`);
+    return { success: false, error: `切换失败: ${e.message}`, rolledBack: rb.rolledBack };
   }
 }
 
-// 非阻塞提示：向目标 tab 注入一条浮动 toast，告知账号已切换
+// 多窗口安全的 reload：每个窗口只 reload 该窗口的 active tab，其他 tab 注入非阻塞 toast
+async function reloadJimengTabsForSwitch(accountName) {
+  const tabs = await chrome.tabs.query({ url: '*://*.jianying.com/*' });
+  if (tabs.length === 0) {
+    try { await chrome.tabs.create({ url: JIMENG_HOME }); } catch {}
+    return;
+  }
+  // 按 windowId 分组，每个 window 内找 active tab
+  const activeByWindow = new Map();
+  for (const tab of tabs) {
+    if (tab.active && !activeByWindow.has(tab.windowId)) {
+      activeByWindow.set(tab.windowId, tab.id);
+    }
+  }
+  for (const tab of tabs) {
+    if (activeByWindow.get(tab.windowId) === tab.id) {
+      try {
+        await clearJimengLocalStorage(tab.id);
+        await chrome.tabs.reload(tab.id, { bypassCache: true });
+      } catch {}
+    } else {
+      await notifyTabAccountSwitched(tab.id, accountName);
+    }
+  }
+}
+
+// 非阻塞提示：向目标 tab 注入一条 Shadow DOM 隔离的浮动 toast
+// 用 Shadow DOM 隔离避免被页面全局 CSS（特别是 reset.css 或 !important 规则）污染
 async function notifyTabAccountSwitched(tabId, newAccountName) {
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
       args: [newAccountName],
       func: (name) => {
-        const id = '__jimeng_switcher_toast__';
-        document.getElementById(id)?.remove();
+        const HOST_ID = '__jimeng_switcher_toast_host__';
+        document.getElementById(HOST_ID)?.remove();
+        const host = document.createElement('div');
+        host.id = HOST_ID;
+        host.style.cssText = 'all:initial;position:fixed;top:0;right:0;z-index:2147483647';
+        const shadow = host.attachShadow({ mode: 'closed' });
+        const style = document.createElement('style');
+        style.textContent = `
+          .toast {
+            position: fixed; top: 16px; right: 16px;
+            background: #4361ee; color: #fff;
+            padding: 10px 14px; border-radius: 8px;
+            font: 13px -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            cursor: pointer; max-width: 280px; line-height: 1.4;
+          }
+        `;
         const div = document.createElement('div');
-        div.id = id;
+        div.className = 'toast';
         div.textContent = `账号已切换为「${name}」，刷新页面后生效`;
-        div.style.cssText = [
-          'position:fixed', 'top:16px', 'right:16px', 'z-index:2147483647',
-          'background:#4361ee', 'color:#fff', 'padding:10px 14px', 'border-radius:8px',
-          'font-size:13px', 'font-family:-apple-system,"Microsoft YaHei",sans-serif',
-          'box-shadow:0 4px 12px rgba(0,0,0,0.2)', 'cursor:pointer',
-          'max-width:280px', 'line-height:1.4',
-        ].join(';');
         div.onclick = () => location.reload();
-        document.body.appendChild(div);
-        setTimeout(() => div.remove(), 8000);
+        shadow.appendChild(style);
+        shadow.appendChild(div);
+        document.documentElement.appendChild(host);
+        setTimeout(() => host.remove(), 8000);
       },
     });
   } catch {}
@@ -484,13 +664,28 @@ async function renameAccount(accountId, newName) {
   return { success: true };
 }
 
-// 校验单个 cookie 对象：只接受 jianying.com 域、字段类型合法
+// 严格 domain 匹配（防正则绕过 "eviljianying.com"）
+function isAllowedCookieDomain(d) {
+  if (typeof d !== 'string' || !d) return false;
+  // 去掉 leading dot（Chrome cookies 的 domain 可能带或不带）
+  const bare = d.startsWith('.') ? d.slice(1) : d;
+  return bare === 'jianying.com' || bare.endsWith('.jianying.com');
+}
+
+// 校验单个 cookie 对象：只接受 jianying.com 域、字段类型合法、未过期
 function sanitizeCookie(c) {
   if (!c || typeof c !== 'object') return null;
   if (typeof c.name !== 'string' || !c.name) return null;
   if (typeof c.value !== 'string') return null;
-  if (typeof c.domain !== 'string' || !/\.?jianying\.com$/i.test(c.domain)) return null;
+  if (!isAllowedCookieDomain(c.domain)) return null;
   if (typeof c.path !== 'string' || !c.path.startsWith('/')) return null;
+
+  // 过期过滤：expirationDate 是秒级 Unix 时间戳，小于 now 就是过期 cookie
+  if (typeof c.expirationDate === 'number' && c.expirationDate > 0) {
+    const nowSec = Date.now() / 1000;
+    if (c.expirationDate < nowSec) return null;
+  }
+
   const clean = {
     name: c.name, value: c.value, domain: c.domain, path: c.path,
     secure: c.secure === true, httpOnly: c.httpOnly === true,
@@ -546,12 +741,24 @@ async function importAccounts(incoming, mode) {
   }
   const current = await loadAccounts();
   const getSid = a => a.cookies?.find(c => c.name === 'sessionid')?.value;
-  const bySid = new Map(current.map(a => [getSid(a), a]));
+  const bySid = new Map();
+  for (const a of current) {
+    const sid = getSid(a);
+    if (sid) bySid.set(sid, a);
+  }
   let added = 0, updated = 0;
   for (const a of sanitized) {
     const sid = getSid(a);
-    if (sid && bySid.has(sid)) { Object.assign(bySid.get(sid), a, { id: bySid.get(sid).id }); updated++; }
-    else { current.push(a); added++; }
+    if (sid && bySid.has(sid)) {
+      // 同 sid 的已存在 → 合并
+      Object.assign(bySid.get(sid), a, { id: bySid.get(sid).id });
+      updated++;
+    } else {
+      current.push(a);
+      // 同步更新 bySid，避免导入文件内重复 SID 被重复插入
+      if (sid) bySid.set(sid, a);
+      added++;
+    }
   }
   await saveAccountsToStorage(current);
   return { success: true, added, updated };
@@ -570,15 +777,18 @@ async function withAccountCookies(account, session, fn) {
 
 // load+merge：只把新状态 merge 到最新的 accounts（而不是覆盖整份），
 // 避免用户在批量查询期间做的删除/重命名/导入被覆盖。
+// 必须在 storageLock 下执行（解决 load/save 之间 TOCTOU）。
 async function mergeAccountStatus(accountId, status) {
-  const accounts = await loadAccounts();
-  const target = accounts.find(a => a.id === accountId);
-  if (!target) return; // 用户中途删除了，不回写
-  target.cachedCredits = status.credits;
-  target.cachedVip = status.vip;
-  target.sessionValid = status.valid;
-  target.lastChecked = Date.now();
-  await saveAccountsToStorage(accounts);
+  return withStorageLock(async () => {
+    const accounts = await loadAccounts();
+    const target = accounts.find(a => a.id === accountId);
+    if (!target) return; // 用户中途删除了，不回写
+    target.cachedCredits = status.credits;
+    target.cachedVip = status.vip;
+    target.sessionValid = status.valid;
+    target.lastChecked = Date.now();
+    await saveAccountsToStorage(accounts);
+  });
 }
 
 async function checkAccountStatus(accountId) {
@@ -587,21 +797,32 @@ async function checkAccountStatus(accountId) {
   if (!target) return { success: false, error: '账号不存在' };
 
   const originalCookies = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(originalCookies);
+  await persistPendingRestore(originalCookies, 'armed');
   const session = new JimengTabSession();
   let status = { valid: false, credits: null, vip: null, user: null };
+  let restoreFailed = false;
 
   try {
+    await markPendingStage('business');
     await session.ensure();
     status = await withAccountCookies(target, session, () => fetchStatusViaSession(session));
     await mergeAccountStatus(accountId, status);
   } finally {
     await session.cleanup();
     await clearDomainCookies();
-    if (originalCookies.length > 0) await restoreCookies(originalCookies);
-    await clearPendingRestore();
+    if (originalCookies.length > 0) {
+      const rr = await restoreCookies(originalCookies);
+      if (!rr.success) restoreFailed = true;
+    }
+    if (restoreFailed) {
+      // 恢复失败：保留 pending 让下次再试，不 committing
+      console.error('[即梦切换器] checkAccountStatus 恢复原 cookie 失败，保留 pending');
+    } else {
+      await markPendingStage('committing');
+      await clearPendingRestore();
+    }
   }
-  return { success: true, status, accountId };
+  return { success: true, status, accountId, restoreFailed };
 }
 
 async function checkAllStatuses() {
@@ -609,12 +830,14 @@ async function checkAllStatuses() {
   if (!accountsSnapshot.length) return { success: false, error: '没有保存的账号' };
 
   const originalCookies = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(originalCookies);
+  await persistPendingRestore(originalCookies, 'armed');
   const session = new JimengTabSession();
   const results = [];
   const total = accountsSnapshot.length;
+  let restoreFailed = false;
 
   try {
+    await markPendingStage('business');
     await broadcastProgress({ phase: 'init', current: 0, total, message: '准备查询...' });
     await session.ensure();
 
@@ -630,7 +853,6 @@ async function checkAllStatuses() {
         console.warn(`[即梦切换器] 查询 ${acc.name} 失败:`, e);
       }
 
-      // 每个账号独立 merge，不覆盖用户中间修改
       await mergeAccountStatus(acc.id, status);
       results.push({ accountId: acc.id, name: acc.name, ...status });
     }
@@ -638,31 +860,48 @@ async function checkAllStatuses() {
     await broadcastProgress({ phase: 'restore', current: total, total, message: '恢复登录状态...' });
     await session.cleanup();
     await clearDomainCookies();
-    if (originalCookies.length > 0) await restoreCookies(originalCookies);
-    await clearPendingRestore();
+    if (originalCookies.length > 0) {
+      const rr = await restoreCookies(originalCookies);
+      if (!rr.success) restoreFailed = true;
+    }
+    if (restoreFailed) {
+      console.error('[即梦切换器] checkAllStatuses 恢复原 cookie 失败，保留 pending');
+    } else {
+      await markPendingStage('committing');
+      await clearPendingRestore();
+    }
     await broadcastProgress({ phase: 'done', current: total, total });
   }
 
-  return { success: true, results };
+  return { success: true, results, restoreFailed };
 }
 
 // ======================== 消息路由 ========================
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = async () => {
+    // SW 被消息唤醒时懒触发一次崩溃恢复检查（onStartup/onInstalled 都不会触发）
+    maybeRecoverOnWakeup();
     try {
       switch (msg.action) {
         case 'getAccounts':    return await loadAccounts();
         case 'getSettings':    return await loadSettings();
         case 'saveSettings':   await saveSettings(msg.patch || {}); return { success: true };
         case 'detectCurrent':  return await detectCurrentAccount();
-        case 'saveCurrentAccount': return await withCookieLock(() => saveCurrentAccount(msg.name));
-        case 'switchAccount':  return await withCookieLock(() => switchAccount(msg.accountId));
-        case 'deleteAccount':  return await deleteAccount(msg.accountId);
-        case 'renameAccount':  return await renameAccount(msg.accountId, msg.name);
-        case 'importAccounts': return await importAccounts(msg.accounts, msg.mode || 'merge');
-        case 'checkStatus':    return await withCookieLock(() => checkAccountStatus(msg.accountId));
-        case 'checkAllStatuses': return await withCookieLock(() => checkAllStatuses());
+        case 'saveCurrentAccount':
+          return await withCookieLock(() => withStorageLock(() => saveCurrentAccount(msg.name)));
+        case 'switchAccount':
+          return await withCookieLock(() => switchAccount(msg.accountId));
+        case 'deleteAccount':
+          return await withStorageLock(() => deleteAccount(msg.accountId));
+        case 'renameAccount':
+          return await withStorageLock(() => renameAccount(msg.accountId, msg.name));
+        case 'importAccounts':
+          return await withStorageLock(() => importAccounts(msg.accounts, msg.mode || 'merge'));
+        case 'checkStatus':
+          return await withCookieLock(() => checkAccountStatus(msg.accountId));
+        case 'checkAllStatuses':
+          return await withCookieLock(() => checkAllStatuses());
         default: return { error: `未知操作: ${msg.action}` };
       }
     } catch (e) {
