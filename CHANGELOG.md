@@ -4,6 +4,33 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.4] - 2026-04-14
+
+R5 终审发现 3 个遗留问题（Codex 8/10 No vs Gemini 10/10 Yes 分歧；Claude 裁决 Codex 全部准确）。本次全部修复。
+
+### 🔴 saveCurrentAccount 也走 pending 恢复屏障
+
+v1.4.2 的 PendingConflictError 屏障只挡住 switch/check*，漏掉了 saveCurrentAccount。如果上次 pending 恢复失败残留，用户再点"保存当前账号"会把脏/半恢复的 cookie 固化进 storage。v1.4.4 saveCurrentAccount 开头也检查 active pending，有就拒绝并提示用户等待自动恢复。
+
+### 🔴 importedUserId 破坏性匹配修复
+
+v1.4.2/v1.4.3 的导入去重中，只要 `importedUserId` 命中现有账号的 `userId`（已验证可信值），就会 `Object.assign` 把导入对象的 **cookies / nickname / avatar** 全量覆盖到现有账号——这让**恶意 JSON 伪造已知 userId 可替换账号登录凭证（账号劫持）**。v1.4.4 区分：
+- **强匹配**（sessionid 相同）→ 全量合并（保留 id/userId）
+- **弱匹配**（仅 importedUserId 相同但 sessionid 不同）→ **不覆盖 cookies**，只更新 name/avatar/nickname 等非敏感显示字段
+
+### 🟡 credit/vip 子请求 transport failure 保护
+
+v1.4.3 的 `unknown` 标志只保护 userInfo 请求。后续 credit/vip 子请求 5xx/断网时 `extract*Obj` 返回 null，`cachedCredits` / `cachedVip` 仍被抹成 null，**抹掉最后一次已知好数据**。v1.4.4 新增 `creditsUnknown` / `vipUnknown` 标志，merge 时看到这些标志就保留旧值。
+
+### Gemini vs Codex 分歧分析
+
+| AI | R5 评分 | 判定 |
+|----|---------|------|
+| Gemini R5 | 10/10 | Yes 可发布，"优秀 MV3 工程范例" |
+| Codex R5 | 8/10 | No，3 个阻塞 |
+
+Claude 独立验证 3 个问题的源码均确认 Codex 准确。Gemini 过于乐观，错判。v1.4.4 按 Codex 清单修复。
+
 ## [1.4.3] - 2026-04-14
 
 补完 Codex R4 的 4 项发现（R4 之前因超时标 N/A，实际结果完成后又发了 v1.4.2 同时跟 Gemini 修）。

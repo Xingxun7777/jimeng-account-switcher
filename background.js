@@ -483,9 +483,14 @@ async function detectCurrentAccount() {
   return match ? match.id : null;
 }
 
-// 返回值中的 unknown=true 表示传输失败（网络/5xx），上游不应覆盖现有状态。
+// 返回值：
+//   unknown=true: 身份查询本身传输失败 → 上游不应覆盖任何现有状态
+//   creditsUnknown/vipUnknown=true: 子请求传输失败 → 上游应保留旧 credits/vip 值
 async function fetchStatusViaSession(session) {
-  const result = { valid: false, credits: null, vip: null, user: null, unknown: false };
+  const result = {
+    valid: false, credits: null, vip: null, user: null,
+    unknown: false, creditsUnknown: false, vipUnknown: false,
+  };
   const infoResp = await session.fetch(API_PATH.userInfo, {}, 'POST');
   if (isTransportFailure(infoResp)) {
     result.unknown = true;
@@ -495,12 +500,44 @@ async function fetchStatusViaSession(session) {
   result.user = extractUserObj(infoResp?.data);
   result.valid = !!(result.user?.userId);
   if (!result.valid) return result;
-  try { result.credits = extractCreditsObj(await session.fetch(API_PATH.userCredit, {}, 'POST')); } catch {}
-  try { result.vip = extractVipObj(await session.fetch(API_PATH.subscription, {}, 'POST')); } catch {}
+
+  // credit 子请求：区分 transport failure（保留旧值）vs 正常返回
+  try {
+    const creditResp = await session.fetch(API_PATH.userCredit, {}, 'POST');
+    if (isTransportFailure(creditResp)) {
+      result.creditsUnknown = true;
+    } else {
+      result.credits = extractCreditsObj(creditResp);
+    }
+  } catch {
+    result.creditsUnknown = true; // 异常也当 transport 失败处理
+  }
+
+  try {
+    const vipResp = await session.fetch(API_PATH.subscription, {}, 'POST');
+    if (isTransportFailure(vipResp)) {
+      result.vipUnknown = true;
+    } else {
+      result.vip = extractVipObj(vipResp);
+    }
+  } catch {
+    result.vipUnknown = true;
+  }
+
   return result;
 }
 
 async function saveCurrentAccount(customName) {
+  // 恢复屏障：如果有未完成的 pending restore（上次异常终止），saveCurrentAccount 也必须拒绝。
+  // 否则当前 cookie 可能是脏/半恢复状态，保存会把错误凭证固化进 storage。
+  const existingPending = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+  if (existingPending?.cookies?.length && existingPending.stage !== 'committing') {
+    return {
+      success: false,
+      error: `检测到上次操作未完成（stage=${existingPending.stage}），请稍等片刻让自动恢复完成，或重启浏览器。`,
+    };
+  }
+
   const cookies = await getAllDomainCookies();
   if (!cookies.length) return { success: false, error: '未检测到即梦登录状态，请先在浏览器中登录即梦' };
   const sid = cookies.find(c => c.name === 'sessionid');
@@ -810,27 +847,43 @@ async function importAccounts(incoming, mode) {
   }
   let added = 0, updated = 0;
   for (const a of sanitized) {
-    // R4-J 清空了 a.userId（不信任导入值），但保留了 a.importedUserId 作为"匹配线索"
-    // 匹配优先级：importedUserId → sessionid
-    // 注意匹配到现有账号的 userId 是之前 API 验证过的可信值
+    // 匹配优先级：sessionid（强证据）→ importedUserId（弱线索，仅弱 merge）
+    // 关键安全：importedUserId 是导入方自称的，不可信；只用它匹配时不允许覆盖 cookies
+    // （否则恶意 JSON 伪造已知 userId 可替换该账号的登录凭证 = 账号劫持）。
     const importHint = a.importedUserId;
+    const sid = getSid(a);
+
     let match = null;
-    if (importHint && byUid.has(importHint)) match = byUid.get(importHint);
-    if (!match) {
-      const sid = getSid(a);
-      if (sid && bySid.has(sid)) match = bySid.get(sid);
+    let matchBy = null; // 'sid' (强) | 'uid' (弱)
+    if (sid && bySid.has(sid)) {
+      match = bySid.get(sid);
+      matchBy = 'sid';
+    } else if (importHint && byUid.has(importHint)) {
+      match = byUid.get(importHint);
+      matchBy = 'uid';
     }
+
     if (match) {
-      // 同账号（按 importedUserId 或 sessionid）→ 合并（保留原 id 和原 userId，不被导入值覆盖）
       const preservedId = match.id;
-      const preservedUserId = match.userId; // 保留原已验证 userId
-      Object.assign(match, a, { id: preservedId, userId: preservedUserId });
+      const preservedUserId = match.userId;
+      if (matchBy === 'sid') {
+        // 强匹配（同一 session cookie）→ 可以全量更新（但保护 id/userId）
+        Object.assign(match, a, { id: preservedId, userId: preservedUserId });
+      } else {
+        // 弱匹配（仅 importedUserId 相同但 sessionid 不同）→ **不覆盖 cookies**，
+        // 只更新非敏感显示字段（name 如果新的更好可以覆盖，其他保持）
+        // 这样恶意 JSON 无法通过伪造 userId 替换用户的真实 cookies
+        if (typeof a.name === 'string' && a.name && a.name !== '未命名') {
+          match.name = a.name;
+        }
+        if (a.avatar) match.avatar = a.avatar;
+        if (a.nickname) match.nickname = a.nickname;
+        // cookies / cachedCredits / cachedVip / sessionValid 全部保留现有
+      }
       updated++;
     } else {
       current.push(a);
-      // 新增的：用 importedUserId 放入 byUid 作为下次匹配线索
       if (importHint) byUid.set(importHint, a);
-      const sid = getSid(a);
       if (sid) bySid.set(sid, a);
       added++;
     }
@@ -894,8 +947,9 @@ async function mergeAccountStatus(accountId, status) {
       await saveAccountsToStorage(accounts);
       return;
     }
-    target.cachedCredits = status.credits;
-    target.cachedVip = status.vip;
+    // credits/vip 子请求 transport failure 时保留旧值（避免网络抖动抹掉最后已知好数据）
+    if (!status.creditsUnknown) target.cachedCredits = status.credits;
+    if (!status.vipUnknown) target.cachedVip = status.vip;
     target.sessionValid = status.valid;
     target.lastChecked = Date.now();
     // 首次拿到真实 userId 时回填，并清理导入残留的 importedUserId
@@ -933,8 +987,8 @@ async function mergeMultipleAccountStatuses(statusById) {
         changed = true;
         continue;
       }
-      acc.cachedCredits = status.credits;
-      acc.cachedVip = status.vip;
+      if (!status.creditsUnknown) acc.cachedCredits = status.credits;
+      if (!status.vipUnknown) acc.cachedVip = status.vip;
       acc.sessionValid = status.valid;
       acc.lastChecked = now;
       if (!acc.userId && status.user?.userId) {
