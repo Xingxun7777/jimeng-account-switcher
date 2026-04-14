@@ -4,6 +4,34 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.2] - 2026-04-14
+
+紧急修复 v1.4.1 的 1 个**致命加载 bug** + 3 个关键问题（Gemini R4 发现）。
+
+### 🔴 紧急修复（阻塞加载）
+
+- **Manifest 权限冲突**：v1.4.1 把 `https://*.jianying.com/*` 同时写入 `host_permissions` 和 `optional_host_permissions`。Chrome/Edge 对 MV3 校验严格，同一权限不能同时出现在两个字段，会导致**扩展无法加载**。v1.4.2 移除 `optional_host_permissions`（保留 `host_permissions` 的当前运行方式）。
+
+### 🔴 防数据损坏
+
+- **`persistPendingRestore` 冲突检测**：v1.4.1 检测到未完成的 pending 时只 `console.warn` 就直接覆盖。如果当前 cookie 已是残缺/污染状态（上次切换中途失败），这会用垃圾覆盖本地唯一正常账号快照，**永久丢失登录态**。v1.4.2 改为 `throw PendingConflictError`，业务方必须显式处理（等待重启或手动恢复），不会继续往下跑。
+
+### 🟡 稳定性
+
+- **`maybeRecoverOnWakeup` 节流漏洞**：v1.4.1 的 30s 节流会让"恢复失败后 30s 内的切换"直接跳过恢复，新业务带着残缺 cookie 进入。v1.4.2 先查 `pending` 是否存在，有残留就无视节流立即恢复。
+- **`importAccounts` 去重失效**：R4 在 `sanitizeImportedAccount` 里把 `a.userId` 强制清空为 ``（不信任导入值），但去重逻辑还查 `a.userId`，userId 路径永远失败。v1.4.2 去重改查 `a.importedUserId`（保留的匹配线索）。
+
+### 审查历程（5 轮）
+
+| Round | 版本 | 发现问题 | 结果 |
+|-------|------|---------|------|
+| R1 | v1.2.2 | 19 | v1.3.0 |
+| R2 | v1.3.0 | 15+ 回归 | v1.4.0 |
+| R3 | v1.4.0 | 10（含 1 致命） | v1.4.1 |
+| **R4** | **v1.4.1** | **4（含 1 致命 loading bug）** | **v1.4.2** |
+
+本次 Codex R4 超时未返回，按协议仅 Claude + Gemini 双方评估。Codex 返回后如有新发现则进入 R5。
+
 ## [1.4.1] - 2026-04-14
 
 v1.4.0 经第三轮三方审查（Codex + Gemini），发现 **10 个新问题**（其中 1 个我自己引入的致命锁 bug），本次全部修复。

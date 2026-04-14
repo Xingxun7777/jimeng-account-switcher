@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "即梦账号切换器",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "即梦多账号快速切换、积分/VIP 状态查看、Session 过期告警、账号导入导出",
   "permissions": [
     "cookies",
@@ -10,9 +10,6 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://*.jianying.com/*"
-  ],
-  "optional_host_permissions": [
     "https://*.jianying.com/*"
   ],
   "icons": {

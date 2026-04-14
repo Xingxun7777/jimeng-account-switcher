@@ -71,14 +71,23 @@ const withStorageLock = makeLock();
 const PENDING_RESTORE_KEY = '__pending_cookie_restore';
 const MAX_RECOVERY_ATTEMPTS = 3;
 
+class PendingConflictError extends Error {
+  constructor(existingStage) {
+    super(`上次恢复未完成 (stage=${existingStage})，拒绝覆盖现有快照以保护数据`);
+    this.name = 'PendingConflictError';
+    this.existingStage = existingStage;
+  }
+}
+
 async function persistPendingRestore(snapshot, stage = 'armed') {
+  // 冲突检测：如果已有 pending 且非 committing 阶段 → **拒绝覆盖**
+  // 原因：当前 cookie 可能是残缺/污染状态，覆盖快照会把唯一正常账号备份丢掉。
+  // 让调用方先显式处理（例如等下次 SW 启动或让用户介入）。
+  const existing = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+  if (existing?.cookies?.length && existing.stage !== 'committing') {
+    throw new PendingConflictError(existing.stage);
+  }
   try {
-    // 冲突检测：如果上次的 pending 还没清掉，说明可能是恢复失败或上次崩溃
-    const existing = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
-    if (existing?.cookies?.length && existing.stage !== 'committing') {
-      console.warn(`[即梦切换器] 检测到未完成的 pending (stage=${existing.stage})，将被新业务覆盖`);
-    }
-    // 新业务从 attempts=0 开始，不继承旧值（避免被旧失败次数过早触发 MAX）
     await chrome.storage.local.set({
       [PENDING_RESTORE_KEY]: {
         cookies: snapshot,
@@ -89,6 +98,7 @@ async function persistPendingRestore(snapshot, stage = 'armed') {
     });
   } catch (e) {
     console.warn('[即梦切换器] 持久化 pending restore 失败:', e);
+    throw e;
   }
 }
 
@@ -174,14 +184,25 @@ chrome.runtime.onInstalled.addListener(() => { tryRecoverPendingRestore(); });
 // 应对 MV3 SW 空闲挂起后被消息唤醒的场景（onStartup/onInstalled 都不会触发）。
 let lastRecoveryCheckTs = 0;
 async function maybeRecoverOnWakeup() {
-  // 节流：同一次 SW 生命周期内每 30 秒最多检查一次
-  if (Date.now() - lastRecoveryCheckTs < 30000) return;
-  lastRecoveryCheckTs = Date.now();
   try {
+    // 先查 pending 是否存在（便宜操作）：
+    // 如果 pending 有且非 committing，**无视节流**立即尝试恢复
+    // （场景：前一次恢复失败后，pending 残留，新业务必须等恢复完成再进行）
     const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
-    if (r[PENDING_RESTORE_KEY]?.cookies?.length) {
+    const pending = r[PENDING_RESTORE_KEY];
+    const hasActivePending = pending?.cookies?.length && pending.stage !== 'committing';
+
+    if (hasActivePending) {
+      // 有残留 pending，必须恢复
+      lastRecoveryCheckTs = Date.now();
       await tryRecoverPendingRestore();
+      return;
     }
+
+    // 无残留 → 节流：同一次 SW 生命周期内每 30 秒最多检查一次
+    if (Date.now() - lastRecoveryCheckTs < 30000) return;
+    lastRecoveryCheckTs = Date.now();
+    // 这里其实已经没有 pending 了，不用再调 tryRecoverPendingRestore
   } catch {}
 }
 
@@ -533,7 +554,14 @@ async function switchAccount(accountId) {
   if (!target) return { success: false, error: '账号不存在' };
 
   const snapshot = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(snapshot, 'armed');
+  try {
+    await persistPendingRestore(snapshot, 'armed');
+  } catch (e) {
+    if (e instanceof PendingConflictError) {
+      return { success: false, error: `${e.message}。请重启浏览器或等待自动恢复。` };
+    }
+    throw e;
+  }
 
   const tryRestore = async () => {
     await clearDomainCookies();
@@ -772,20 +800,26 @@ async function importAccounts(incoming, mode) {
   }
   let added = 0, updated = 0;
   for (const a of sanitized) {
+    // R4-J 清空了 a.userId（不信任导入值），但保留了 a.importedUserId 作为"匹配线索"
+    // 匹配优先级：importedUserId → sessionid
+    // 注意匹配到现有账号的 userId 是之前 API 验证过的可信值
+    const importHint = a.importedUserId;
     let match = null;
-    // R4-J: 导入的 userId 不可信任，但如果匹配到现有账号（现有 userId 是之前 API 验证过的），可以安全 merge
-    if (a.userId && byUid.has(a.userId)) match = byUid.get(a.userId);
+    if (importHint && byUid.has(importHint)) match = byUid.get(importHint);
     if (!match) {
       const sid = getSid(a);
       if (sid && bySid.has(sid)) match = bySid.get(sid);
     }
     if (match) {
-      // 同账号（按 userId 或 sessionid）→ 合并（保留原 id）
-      Object.assign(match, a, { id: match.id });
+      // 同账号（按 importedUserId 或 sessionid）→ 合并（保留原 id 和原 userId，不被导入值覆盖）
+      const preservedId = match.id;
+      const preservedUserId = match.userId; // 保留原已验证 userId
+      Object.assign(match, a, { id: preservedId, userId: preservedUserId });
       updated++;
     } else {
       current.push(a);
-      if (a.userId) byUid.set(a.userId, a);
+      // 新增的：用 importedUserId 放入 byUid 作为下次匹配线索
+      if (importHint) byUid.set(importHint, a);
       const sid = getSid(a);
       if (sid) bySid.set(sid, a);
       added++;
@@ -892,7 +926,14 @@ async function checkAccountStatus(accountId) {
   if (!target) return { success: false, error: '账号不存在' };
 
   const originalCookies = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(originalCookies, 'armed');
+  try {
+    await persistPendingRestore(originalCookies, 'armed');
+  } catch (e) {
+    if (e instanceof PendingConflictError) {
+      return { success: false, error: `${e.message}。请重启浏览器或等待自动恢复。` };
+    }
+    throw e;
+  }
   const session = new JimengTabSession();
   let status = { valid: false, credits: null, vip: null, user: null };
   let restoreFailed = false;
@@ -925,7 +966,14 @@ async function checkAllStatuses() {
   if (!accountsSnapshot.length) return { success: false, error: '没有保存的账号' };
 
   const originalCookies = serializeCookies(await getAllDomainCookies());
-  await persistPendingRestore(originalCookies, 'armed');
+  try {
+    await persistPendingRestore(originalCookies, 'armed');
+  } catch (e) {
+    if (e instanceof PendingConflictError) {
+      return { success: false, error: `${e.message}。请重启浏览器或等待自动恢复。` };
+    }
+    throw e;
+  }
   const session = new JimengTabSession();
   const results = [];
   const statusById = new Map(); // 内存收集，循环结束一次性写回，避免 O(N) storage I/O
