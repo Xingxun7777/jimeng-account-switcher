@@ -1,8 +1,14 @@
 # 即梦账号切换器 (Jimeng Account Switcher)
 
+[![Version](https://img.shields.io/github/v/release/Xingxun7777/jimeng-account-switcher?label=version&color=brightgreen)](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Manifest V3](https://img.shields.io/badge/Manifest-V3-orange.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
+
 一款用于管理多个 [即梦](https://jimeng.jianying.com) 账号的浏览器扩展，主要功能是 **多账号快速切换** 与 **积分/VIP 状态展示**。
 
 > 基于 **Manifest V3** 构建，无任何第三方依赖。兼容所有 Chromium 系浏览器（Chrome / Edge / Brave 等），以及 Firefox 128+。
+>
+> 📦 **最新稳定版 v1.5.0** — 经 6 轮 AI 代码审查加固，50+ 项安全/正确性/体验问题已修复。[查看 Release](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest)
 
 ---
 
@@ -28,9 +34,17 @@
 
 ### 速览
 
+**方式 1：下载 Release 包（推荐）**
+
+到 [Releases 页面](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest) 下载 `jimeng-account-switcher-vX.X.X.zip`，解压到不会被清理的位置。
+
+**方式 2：Clone 源码**
+
 ```bash
 git clone https://github.com/Xingxun7777/jimeng-account-switcher.git
 ```
+
+**加载步骤**
 
 - **Chromium 系（Chrome/Edge/Brave 等）**：扩展管理页 → 开发者模式 → 加载已解压 → 选源码文件夹
 - **Firefox 128+**：`about:debugging#/runtime/this-firefox` → 临时载入附加组件 → 选 `manifest.json`

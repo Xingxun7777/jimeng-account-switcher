@@ -4,6 +4,36 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.5.0] - 2026-04-15
+
+**🎉 首个稳定版。** 从 v1.2.0 起累计 6 轮三方代码审查（Claude + Codex + Gemini），共修复 50+ 项安全/正确性/体验问题。v1.5.0 在 v1.4.5 基础上正式标记为稳定版本，无代码变更。
+
+### 相比 v1.2.0（功能定型版）的主要强化
+
+**安全性**
+- 双重互斥锁（cookie store + storage）防读-改-写竞争
+- 崩溃恢复状态机（armed / business / committing）Service Worker 启动自动回滚未完成事务
+- 导入 JSON 弱匹配不覆盖 cookie（防账号劫持）
+- Host-only cookie 正确处理（不放宽到 domain cookie）
+- 仅允许 HTTPS+secure 写入，不降级 HTTP
+
+**正确性**
+- userId 身份断言防 cookie 串号（切账后实际登录的账号必须匹配目标）
+- 区分 auth failure 与 transport failure（网络抖动不再把账号标红清缓存）
+- `credits/vip` 子请求 transport 异常保留上次已知值
+- 批量刷新异常分类（tab 超时 vs 真实 auth 失败分别处理）
+
+**体验**
+- 完整 14+ 浏览器安装指南（Chrome/Edge/Brave/Opera/Vivaldi/Arc/360/QQ/搜狗/Yandex/Firefox 128+/Kiwi 等）
+- Firefox 128+ 首次支持
+- 账号卡片显示 Session 过期、VIP 到期天数
+- 导入/导出 JSON、重命名、删除账号等日常维护操作
+
+**文档**
+- 新增 `PRIVACY_POLICY.md`
+- 完整 `INSTALL.md` 覆盖 Chromium / Firefox / 移动端 Kiwi
+- README 标注浏览器兼容矩阵
+
 ## [1.4.5] - 2026-04-15
 
 R6 审查收尾版本。Codex R6 判 8.5/10 仅剩 1 项阻塞，本次修完后 Codex 明确承诺"放行并建议打 v1.5.0 tag"。
