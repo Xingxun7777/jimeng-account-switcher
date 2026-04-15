@@ -8,7 +8,7 @@
 
 > 基于 **Manifest V3** 构建，无任何第三方依赖。兼容所有 Chromium 系浏览器（Chrome / Edge / Brave 等），以及 Firefox 128+。
 >
-> 📦 **最新稳定版 v1.5.0** — 经 6 轮 AI 代码审查加固，50+ 项安全/正确性/体验问题已修复。[查看 Release](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest)
+> 📦 **最新稳定版 v1.5.0** — [查看 Release](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest)
 
 ---
 
