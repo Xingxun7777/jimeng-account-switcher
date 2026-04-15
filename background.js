@@ -1071,11 +1071,22 @@ async function checkAllStatuses() {
       const acc = accountsSnapshot[i];
       await broadcastProgress({ phase: 'check', current: i + 1, total, name: acc.name, step: 'querying' });
 
-      let status = { valid: false, credits: null, vip: null, user: null };
+      let status;
       try {
         status = await withAccountCookies(acc, session, () => fetchStatusViaSession(session));
       } catch (e) {
         console.warn(`[即梦切换器] 查询 ${acc.name} 失败:`, e);
+        // 按异常类型区分：
+        //   RestoreFailureError (cookie 写入失败) → 视为真正 session 失效（valid:false，会覆盖状态）
+        //   其他（tab load timeout / reload 失败 / network）→ transport failure（不覆盖现有缓存）
+        if (e instanceof RestoreFailureError) {
+          status = { valid: false, credits: null, vip: null, user: null, unknown: false };
+        } else {
+          status = {
+            valid: false, credits: null, vip: null, user: null,
+            unknown: true, creditsUnknown: true, vipUnknown: true,
+          };
+        }
       }
 
       statusById.set(acc.id, status);

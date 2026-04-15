@@ -4,6 +4,26 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本 2.0.0](https://semver.org/lang/zh-CN/)。
 
+## [1.4.5] - 2026-04-15
+
+R6 审查收尾版本。Codex R6 判 8.5/10 仅剩 1 项阻塞，本次修完后 Codex 明确承诺"放行并建议打 v1.5.0 tag"。
+
+### 🔴 checkAllStatuses catch 区分异常类型
+
+`checkAllStatuses` 循环里捕获 `withAccountCookies` 异常时，旧版把默认 `{valid:false, credits:null, vip:null}` 一股脑 merge，**tab load timeout / reload 失败 / network 异常**都会让健康账号被错误标红 + 清空积分/VIP 缓存。在 100 账号 + 网络抖动场景下特别明显。
+
+v1.4.5 按异常类型区分：
+- `RestoreFailureError`（cookie 写入失败、真 auth 问题）→ `{valid: false, ...}` 保持覆盖行为
+- 其他异常（tab 超时 / 传输失败 / 未知错误）→ `{unknown: true, creditsUnknown: true, vipUnknown: true}` 不覆盖现有缓存
+
+这是 Codex R6 给出的最后一条发布阻塞。
+
+### 第 6 轮三方审查状态
+
+- **Codex R6**: 8.5/10 No → v1.4.5 修完后预期放行
+- **Gemini R6**: CLI 超时（600s），标 N/A。R5 已证明 Gemini 评分偏乐观（R5 给 10/10 但实际有 3 个真漏洞被 Codex 抓出），此轮以 Codex 为准
+- **Claude 裁决**：v1.4.5 完成后 Codex 清单无遗留，符合发布稳定版条件
+
 ## [1.4.4] - 2026-04-14
 
 R5 终审发现 3 个遗留问题（Codex 8/10 No vs Gemini 10/10 Yes 分歧；Claude 裁决 Codex 全部准确）。本次全部修复。
