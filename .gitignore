@@ -22,6 +22,9 @@ dist/
 build/
 .env
 .env.local
+playwright-report/
+test-results/
+.auth/
 
 # Packaged extension artifacts
 *.zip

@@ -32,6 +32,66 @@ body {
   color: #16213e;
 }
 
+.title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.build-version {
+  font-size: 11px;
+  color: #7b8190;
+  line-height: 1;
+}
+
+/* ============ 保存面板 ============ */
+.save-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: #fff;
+  border: 1px solid #e8eaef;
+  border-radius: 8px;
+}
+
+.save-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333;
+}
+
+.save-hint {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.5;
+}
+
+.text-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #c8d0e0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #1a1a2e;
+  background: #fff;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.text-input:focus {
+  border-color: #4361ee;
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.12);
+}
+
+.text-input:disabled {
+  background: #f5f6fa;
+  color: #999;
+  cursor: not-allowed;
+}
+
 /* ============ 摘要栏 ============ */
 .summary-bar {
   display: flex;
@@ -231,7 +291,7 @@ body {
 /* 卡片底部: 积分信息 */
 .card-bottom {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
   margin-top: 6px;
   padding-top: 6px;
@@ -240,16 +300,46 @@ body {
 
 .credits-info {
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
   font-size: 11px;
   color: #666;
+}
+
+.credits-main {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
 }
 
 .credits-num {
   font-weight: 700;
   color: #f72585;
   font-size: 13px;
+}
+
+.account-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+
+.detail-row {
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  gap: 6px;
+  line-height: 1.35;
+}
+
+.detail-label {
+  color: #9aa0ad;
+  white-space: nowrap;
+}
+
+.detail-value {
+  color: #3c4257;
+  word-break: break-word;
 }
 
 .vip-tag {
@@ -354,6 +444,11 @@ body {
   font-size: 12px;
   color: #8d6e00;
 }
+.unsaved-banner {
+  background: #edf9f1;
+  border-color: #9dd6af;
+  color: #17633a;
+}
 .banner-icon { font-size: 14px; }
 .banner-text { flex: 1; }
 
@@ -373,6 +468,15 @@ body {
   margin-bottom: 8px;
 }
 .settings-row:last-child { margin-bottom: 0; }
+.settings-row-stack {
+  align-items: flex-start;
+  flex-direction: column;
+}
+.settings-help {
+  font-size: 11px;
+  color: #888;
+  line-height: 1.5;
+}
 .settings-label {
   display: flex;
   align-items: center;
@@ -400,6 +504,8 @@ body {
   display: flex;
   gap: 6px;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 /* ============ 模态对话框 ============ */

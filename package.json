@@ -1,0 +1,36 @@
+{
+  "name": "jimeng-account-switcher",
+  "version": "1.6.25",
+  "description": "即梦账号切换器：Playwright 扩展回归测试",
+  "main": "background.js",
+  "scripts": {
+    "lint:syntax": "node --check background.js && node --check popup/popup.js",
+    "test": "playwright test",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "cross-env PW_HEADFUL=1 playwright test",
+    "test:e2e:ui": "cross-env PW_HEADFUL=1 playwright test --ui",
+    "test:e2e:debug": "cross-env PW_HEADFUL=1 playwright test --debug",
+    "auth:login-window": "node scripts/open-login-window.js",
+    "auth:export-current": "node scripts/export-current-auth.js",
+    "auth:export-saved": "node scripts/export-saved-account-auth.js",
+    "auth:build-import": "node scripts/build-import-from-auth.js",
+    "smoke:live": "node scripts/run-live-auth-switch-smoke.js",
+    "smoke:live:popup": "node scripts/run-live-popup-switch-smoke.js",
+    "verify": "npm run lint:syntax && npm test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xingxun7777/jimeng-account-switcher.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Xingxun7777/jimeng-account-switcher/issues"
+  },
+  "homepage": "https://github.com/Xingxun7777/jimeng-account-switcher#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1",
+    "cross-env": "^10.1.0"
+  }
+}

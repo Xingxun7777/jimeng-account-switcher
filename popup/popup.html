@@ -9,12 +9,33 @@
   <div class="container">
     <!-- 顶栏 -->
     <header class="header">
-      <h1 class="title">即梦账号管理</h1>
+      <div class="title-group">
+        <h1 class="title">即梦账号管理</h1>
+        <div id="build-version" class="build-version">v--</div>
+      </div>
       <div class="header-actions">
         <button id="btn-save" class="btn btn-primary">保存当前账号</button>
         <button id="btn-toggle-settings" class="btn btn-sm btn-outline" title="设置">&#9881;</button>
       </div>
     </header>
+
+    <!-- 保存账号信息 -->
+    <section class="save-panel">
+      <label class="save-label" for="input-save-name">账号名称 / 备注（可选）</label>
+      <input
+        id="input-save-name"
+        class="text-input"
+        type="text"
+        maxlength="40"
+        placeholder="留空则自动使用即梦昵称"
+      />
+      <p class="save-hint">正常在即梦网页登录账号；插件检测到网页登录页时会自动隔离旧浏览器身份，避免新登录把旧账号挤下线。网页登录完成后点「保存当前账号」。</p>
+    </section>
+
+    <div id="unsaved-current-banner" class="expired-banner unsaved-banner hidden">
+      <span class="banner-icon">&#128161;</span>
+      <span id="unsaved-current-text" class="banner-text"></span>
+    </div>
 
     <!-- 权限授权横幅（Firefox 下首次需要用户批准 host_permissions） -->
     <div id="permission-banner" class="expired-banner hidden">
@@ -27,11 +48,18 @@
     <div id="expired-banner" class="expired-banner hidden">
       <span class="banner-icon">&#9888;</span>
       <span id="expired-text" class="banner-text"></span>
-      <button id="btn-expired-action" class="btn btn-sm btn-outline">查看</button>
+      <button id="btn-expired-action" class="btn btn-sm btn-outline">说明</button>
     </div>
 
     <!-- 设置面板 -->
     <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-row settings-row-stack">
+        <label class="settings-label" for="toggle-auto-save">
+          <input type="checkbox" id="toggle-auto-save" />
+          自动保存新登录账号（推荐）
+        </label>
+        <div class="settings-help">开启后，只要检测到新的即梦登录态，插件会自动把它保存到账号列表。</div>
+      </div>
       <div class="settings-row">
         <button id="btn-export" class="btn btn-sm btn-outline">导出账号</button>
         <button id="btn-import" class="btn btn-sm btn-outline">导入账号</button>

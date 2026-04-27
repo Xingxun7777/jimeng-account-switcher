@@ -107,6 +107,51 @@ jimeng-account-switcher/
 
 ---
 
+## 🧪 自动化测试（Playwright）
+
+本项目使用 **Playwright + 自带 Chromium** 做扩展回归测试。
+
+> 原因：Playwright 官方已说明，**Google Chrome / Microsoft Edge 已移除稳定侧载扩展所需的命令行 flag**，因此扩展自动化测试应优先使用 Playwright 自带 Chromium，而不是依赖 `chrome://extensions/` 手工加载流程。
+
+### 安装
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+### 运行
+
+```bash
+# 无头回归
+npm test
+
+# 有界面调试
+npm run test:e2e:headed
+
+# Playwright UI
+npm run test:e2e:ui
+
+# 真实凭证 smoke test（严格判定，失败返回非 0）
+npm run smoke:live -- --authA .auth/account-a.json --authB .auth/account-b.json
+```
+
+### 当前覆盖的关键用例
+
+- 扩展可成功加载
+- popup 可直接通过 `chrome-extension://<id>/popup/popup.html` 打开
+- “账号名称 / 备注”输入草稿会持久化并在重开 popup 后恢复
+- 保存时会把自定义名称传给 background，并清空草稿
+- popup 的切换 / 重命名 / 删除操作会派发到正确账号
+- `JimengTabSession` 在已有即梦页时复用当前页，不再新开标签页
+- `reloadJimengTabsForSwitch` 在已有即梦页时只刷新现有标签页，不创建新标签页
+- 没有即梦页时，才回退到临时标签页
+- 真实凭证 smoke：保存 A / 保存 B / 切 A / 切 B，且自动校验 userId 与“不新开页”
+
+更完整的测试闭环与迭代规范见：[TESTING.md](./TESTING.md)
+
+---
+
 ## 🌐 浏览器兼容性
 
 | 浏览器 | 支持状态 | 备注 |
