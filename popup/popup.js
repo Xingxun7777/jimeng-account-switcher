@@ -31,25 +31,21 @@ let cachedCurrentId = null;
 let cachedAccounts = [];
 let saveDraftTimer = null;
 
+// Firefox 使用 browser.* Promise API；Chromium 使用 chrome.* Promise API。
+const extensionApi = globalThis.browser || globalThis.chrome;
+
 // ======================== 工具函数 ========================
 
-function sendMsg(msg) {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage(msg, (response) => {
-        // 必须检查 lastError，否则 Chrome 会在 console 打印 "Unchecked runtime.lastError"
-        if (chrome.runtime.lastError) {
-          console.warn('[即梦] sendMessage 失败:', chrome.runtime.lastError.message);
-          resolve({ success: false, error: `通信失败: ${chrome.runtime.lastError.message}`, __sendMsgError: true });
-          return;
-        }
-        resolve(response);
-      });
-    } catch (e) {
-      console.error('[即梦] sendMessage 异常:', e);
-      resolve({ success: false, error: `通信异常: ${e.message}`, __sendMsgError: true });
-    }
-  });
+async function sendMsg(msg) {
+  try {
+    // browser.*（Firefox）和 Chromium MV3 均支持 Promise；优先走 Promise，避免 Firefox chrome-callback 差异。
+    const response = await extensionApi.runtime.sendMessage(msg);
+    return response;
+  } catch (e) {
+    const message = extensionApi.runtime?.lastError?.message || e?.message || String(e);
+    console.warn('[即梦] sendMessage 失败:', message);
+    return { success: false, error: `通信失败: ${message}`, __sendMsgError: true };
+  }
 }
 
 let toastTimer = null;
@@ -133,7 +129,7 @@ function renderAccountDetailRows(credits, vip) {
 async function renderBuildVersion() {
   if (!$buildVersion) return;
   try {
-    const manifest = chrome.runtime.getManifest?.();
+    const manifest = extensionApi.runtime.getManifest?.();
     const version = manifest?.version || '--';
     $buildVersion.textContent = `v${version}`;
     const diag = await sendMsg({ action: 'getRuntimeDiagnostics' });
@@ -514,7 +510,7 @@ function updateExpiredBanner(accounts) {
 
 // ======================== 进度监听 ========================
 
-chrome.runtime.onMessage.addListener((msg) => {
+extensionApi.runtime.onMessage.addListener((msg) => {
   if (!msg?.__progress) return;
   $progressArea.classList.remove('hidden');
   const pct = msg.total > 0 ? Math.floor((msg.current / msg.total) * 100) : 0;
@@ -535,9 +531,9 @@ const $btnGrantPerm = document.getElementById('btn-grant-permission');
 
 // 返回 'granted' | 'denied' | 'unsupported' | 'error'
 async function checkHostPermission() {
-  if (!chrome.permissions?.contains) return 'unsupported'; // 老浏览器兜底（Chromium 默认授权）
+  if (!extensionApi.permissions?.contains) return 'unsupported'; // 老浏览器兜底（Chromium 默认授权）
   try {
-    const has = await chrome.permissions.contains({ origins: [HOST_PATTERN] });
+    const has = await extensionApi.permissions.contains({ origins: [HOST_PATTERN] });
     return has ? 'granted' : 'denied';
   } catch (e) {
     console.error('[即梦] permissions.contains 异常:', e);
@@ -546,12 +542,12 @@ async function checkHostPermission() {
 }
 
 async function promptHostPermission() {
-  if (!chrome.permissions?.request) {
+  if (!extensionApi.permissions?.request) {
     showToast('当前浏览器不支持权限 API，请在扩展管理页手动启用', 'error');
     return false;
   }
   try {
-    return await chrome.permissions.request({ origins: [HOST_PATTERN] });
+    return await extensionApi.permissions.request({ origins: [HOST_PATTERN] });
   } catch (e) {
     showToast(`授权失败: ${e.message}`, 'error');
     return false;
@@ -624,7 +620,7 @@ $inputSaveName?.addEventListener('keydown', (e) => {
 
 // 真实 Chrome 本地救援入口：
 // 访问 chrome-extension://<id>/popup/popup.html?localRepair=1 时，从本机扩展目录里的
-// .auth/REAL_CHROME_IMPORT_VALID_ACCOUNTS.json 覆盖写入 chrome.storage.local，
+// .auth/REAL_CHROME_IMPORT_VALID_ACCOUNTS.json 覆盖写入 extensionApi.storage.local，
 // 并把当前浏览器 Cookie 切到第一个已验证账号。此入口只用于本机调试/修复，不在 popup UI 暴露。
 async function runLocalRepairImportFromBundledAuth() {
   const write = (line) => {
@@ -671,8 +667,8 @@ async function runLocalRepairImportFromBundledAuth() {
   };
   const getAllDomainCookies = async () => {
     const [a, b] = await Promise.all([
-      chrome.cookies.getAll({ domain: 'jianying.com' }),
-      chrome.cookies.getAll({ domain: 'jimeng.jianying.com' }),
+      extensionApi.cookies.getAll({ domain: 'jianying.com' }),
+      extensionApi.cookies.getAll({ domain: 'jimeng.jianying.com' }),
     ]);
     const seen = new Set();
     const all = [];
@@ -688,8 +684,8 @@ async function runLocalRepairImportFromBundledAuth() {
   const clearDomainCookies = async () => {
     for (const cookie of await getAllDomainCookies()) {
       const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
-      try { await chrome.cookies.remove({ url: `https://${domain}${cookie.path}`, name: cookie.name }); } catch {}
-      try { await chrome.cookies.remove({ url: `http://${domain}${cookie.path}`, name: cookie.name }); } catch {}
+      try { await extensionApi.cookies.remove({ url: `https://${domain}${cookie.path}`, name: cookie.name }); } catch {}
+      try { await extensionApi.cookies.remove({ url: `http://${domain}${cookie.path}`, name: cookie.name }); } catch {}
     }
   };
   const restoreCookies = async (cookies) => {
@@ -712,7 +708,7 @@ async function runLocalRepairImportFromBundledAuth() {
       }
       if (cookie.expirationDate) details.expirationDate = cookie.expirationDate;
       try {
-        const result = await chrome.cookies.set(details);
+        const result = await extensionApi.cookies.set(details);
         if (!result) failures.push({ name: cookie.name, auth: authNames.has(cookie.name) });
       } catch (e) {
         failures.push({ name: cookie.name, auth: authNames.has(cookie.name), error: e.message });
@@ -721,11 +717,11 @@ async function runLocalRepairImportFromBundledAuth() {
     return failures;
   };
   const reloadExistingJimengTabs = async () => {
-    const tabs = await chrome.tabs.query({ url: '*://*.jianying.com/*' });
+    const tabs = await extensionApi.tabs.query({ url: '*://*.jianying.com/*' });
     for (const tab of tabs) {
       if (!tab.id) continue;
       try {
-        await chrome.scripting.executeScript({
+        await extensionApi.scripting.executeScript({
           target: { tabId: tab.id },
           world: 'MAIN',
           func: async () => {
@@ -735,14 +731,14 @@ async function runLocalRepairImportFromBundledAuth() {
           },
         });
       } catch {}
-      try { await chrome.tabs.reload(tab.id, { bypassCache: true }); } catch {}
+      try { await extensionApi.tabs.reload(tab.id, { bypassCache: true }); } catch {}
     }
     return tabs.length;
   };
 
   try {
     write('开始本地修复导入…');
-    const url = chrome.runtime.getURL('.auth/REAL_CHROME_IMPORT_VALID_ACCOUNTS.json');
+    const url = extensionApi.runtime.getURL('.auth/REAL_CHROME_IMPORT_VALID_ACCOUNTS.json');
     const resp = await fetch(url, { cache: 'no-store' });
     if (!resp.ok) throw new Error(`读取导入文件失败 HTTP ${resp.status}`);
     const payload = await resp.json();
@@ -752,7 +748,7 @@ async function runLocalRepairImportFromBundledAuth() {
     if (!accounts.length) throw new Error('没有包含 sessionid 的有效账号');
     write(`准备覆盖账号数：${accounts.length}`);
     accounts.forEach((account, i) => write(`#${i + 1} ${account.name} userId=${account.userId} cookies=${account.cookies.length}`));
-    await chrome.storage.local.set({
+    await extensionApi.storage.local.set({
       jimeng_accounts: accounts,
       jimeng_accounts_backup: accounts,
       jimeng_accounts_journal: [{
@@ -768,8 +764,8 @@ async function runLocalRepairImportFromBundledAuth() {
         })),
       }],
     });
-    await chrome.storage.local.remove('__pending_cookie_restore');
-    const readBack = await chrome.storage.local.get(['jimeng_accounts', '__pending_cookie_restore']);
+    await extensionApi.storage.local.remove('__pending_cookie_restore');
+    const readBack = await extensionApi.storage.local.get(['jimeng_accounts', '__pending_cookie_restore']);
     const readBackAccounts = Array.isArray(readBack.jimeng_accounts) ? readBack.jimeng_accounts : [];
     const uniqueUserIds = new Set(readBackAccounts.map(account => account.userId).filter(Boolean)).size;
     const uniqueSessions = new Set(readBackAccounts.map(account =>
@@ -787,7 +783,7 @@ async function runLocalRepairImportFromBundledAuth() {
     write('完成。现在重新打开插件，应看到 3 个账号。');
     if (new URLSearchParams(location.search).get('reloadExtension') === '1') {
       write('正在重载扩展以应用最新 manifest/background…');
-      setTimeout(() => chrome.runtime.reload(), 800);
+      setTimeout(() => extensionApi.runtime.reload(), 800);
     }
   } catch (e) {
     write(`失败：${e.message || e}`);

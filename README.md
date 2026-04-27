@@ -6,9 +6,9 @@
 
 一款用于管理多个 [即梦](https://jimeng.jianying.com) 账号的浏览器扩展，主要功能是 **多账号快速切换** 与 **积分/VIP 状态展示**。
 
-> 基于 **Manifest V3** 构建，无任何第三方依赖。兼容所有 Chromium 系浏览器（Chrome / Edge / Brave 等），以及 Firefox 128+。
+> 基于 **Manifest V3** 构建，运行时无第三方依赖。支持现代 Chromium 系浏览器（Chrome / Edge / Brave / Opera / Vivaldi / Arc 等，Chromium 102+，建议最新版）以及 Firefox 140+；国产/移动 Chromium 浏览器取决于其实际内核版本与是否允许开发者模式加载。
 >
-> 📦 **最新稳定版 v1.5.0** — [查看 Release](https://github.com/Xingxun7777/jimeng-account-switcher/releases/latest)
+> 📦 **当前源码版 v1.6.26**；Release 包可能滞后，需最新版请以 `main` 分支为准。
 
 ---
 
@@ -30,7 +30,7 @@
 
 **👉 完整安装指南见 [INSTALL.md](./INSTALL.md)**
 
-覆盖所有主流浏览器（Chrome / Edge / Brave / Opera / Vivaldi / Arc / 360 / QQ / 搜狗 / Yandex / Firefox / Kiwi Android 等）的分步详细步骤、常见坑位、2025-2026 政策变更说明。
+覆盖主流桌面浏览器（Chrome / Edge / Brave / Opera / Vivaldi / Arc / Firefox）和部分 Chromium 内核衍生浏览器的安装步骤、兼容边界与常见坑位。不是所有国产/移动浏览器都等效支持 MV3。
 
 ### 速览
 
@@ -46,8 +46,8 @@ git clone https://github.com/Xingxun7777/jimeng-account-switcher.git
 
 **加载步骤**
 
-- **Chromium 系（Chrome/Edge/Brave 等）**：扩展管理页 → 开发者模式 → 加载已解压 → 选源码文件夹
-- **Firefox 128+**：`about:debugging#/runtime/this-firefox` → 临时载入附加组件 → 选 `manifest.json`
+- **现代 Chromium 系（Chrome/Edge/Brave 等，102+）**：扩展管理页 → 开发者模式 → 加载已解压 → 选源码文件夹
+- **Firefox 140+**：`about:debugging#/runtime/this-firefox` → 临时载入附加组件 → 选 `manifest.json`；长期使用需签名 XPI 或 Developer/Nightly/ESR 的签名检查关闭方案
 - **Edge 用户注意**：开发者模式开关在**左下角**，不是右上角
 
 ⚠️ 源码文件夹**不要放在桌面**或会被清理的位置，扩展会持续引用这个路径。
@@ -84,7 +84,7 @@ jimeng-account-switcher/
 
 ### 架构
 - **Manifest V3** service worker + popup 结构
-- 所有 API 调用通过 `chrome.scripting.executeScript` + `world: 'MAIN'` 在即梦页面上下文内执行，由页面自身补全签名、指纹、referer，避开服务端风控
+- 扩展运行时通过 `browser.*` / `chrome.*` 兼容入口调用 WebExtension API；需要页面内部状态时使用 `scripting.executeScript` + `world: 'MAIN'`，切换账号的身份校验则优先走后台 direct API，避免干扰用户可见页面
 - **双重互斥锁**：cookie store（`withCookieLock`）+ account storage（`withStorageLock`）独立串行，避免读-改-写竞争
 - **崩溃恢复**：批量操作前把原 cookie 快照以阶段化状态（armed / business / committing）持久化到 `storage.local`；Service Worker 启动 + 消息唤醒时自动检测并恢复，避免意外终止丢失用户登录态
 
@@ -156,14 +156,15 @@ npm run smoke:live -- --authA .auth/account-a.json --authB .auth/account-b.json
 
 | 浏览器 | 支持状态 | 备注 |
 |--------|---------|------|
-| Chrome | ✅ | 原生支持 MV3 |
-| Microsoft Edge | ✅ | Windows 自带，Chromium 内核 |
-| Brave | ✅ | |
-| Opera / Vivaldi / Arc | ✅ | |
-| 360 极速浏览器 / QQ 浏览器 / 搜狗浏览器 | ✅ | 需是 Chromium 内核版本 |
-| Firefox 128+ | ✅ | 支持 `world: 'MAIN'` 的最低版本 |
-| Firefox 109 - 127 | ⚠️ | 支持 MV3 但状态查询功能不可用 |
-| Safari | ❌ | 未适配 |
+| Chrome / Chromium | ✅ | 需 Chromium 102+，建议最新版；`manifest.json` 已设置 `minimum_chrome_version: 102` |
+| Microsoft Edge | ✅ | 需 Edge 102+；手动安装时开发者模式开关在左下角 |
+| Brave / Opera / Vivaldi / Arc | ✅ | 需基于现代 Chromium；如内核过旧会被最低版本限制或运行异常 |
+| 360 极速 / QQ / 搜狗 / Yandex 等 Chromium 衍生浏览器 | ⚠️ | 取决于实际 Chromium 内核版本和是否开放“加载已解压扩展”；不能承诺所有版本 |
+| Firefox 140+ 桌面版 | ✅ | 已使用 `browser_specific_settings.gecko`、固定扩展 ID 和 Firefox 签名所需的数据收集声明；Release/Beta 长期安装仍需签名 XPI |
+| Firefox 102 - 139 | ❌ | 当前 manifest 设定最低 Firefox 140，不作为支持目标 |
+| Firefox Android 142+ | ⚠️ | manifest 已设置 `gecko_android.strict_min_version: 142.0` 以满足 AMO lint，但未作为交付目标；需单独真机验证 |
+| Kiwi Android / 其他移动 Chromium | ⚠️ | 可能可加载，但未进入自动化回归门禁；真实可用性取决于浏览器实现 |
+| Safari | ❌ | 未适配，需要单独转换为 Safari Web Extension |
 
 ---
 

@@ -4,6 +4,11 @@
 // 不做积分领取（即梦免费积分登录即领，次日过期，无需囤积）
 // ================================================================
 
+
+// Firefox 使用 browser.* Promise API；Chromium 使用 chrome.* Promise API。
+// 统一入口后，核心逻辑可以在两类 WebExtension 运行时复用。
+const extensionApi = globalThis.browser || globalThis.chrome;
+if (!extensionApi) throw new Error('WebExtension API unavailable');
 // ======================== 常量 ========================
 const JIMENG_DOMAIN = '.jianying.com';
 const JIMENG_URL = 'https://jimeng.jianying.com';
@@ -29,7 +34,7 @@ const API_PATH = {
   subscription: '/commerce/v1/subscription/user_info',
 };
 
-// Chromium 扩展环境下，chrome.cookies.getAll(...) 对部分即梦登录 cookie
+// Chromium 扩展环境下，extensionApi.cookies.getAll(...) 对部分即梦登录 cookie
 // （尤其是若干非 secure / HttpOnly 组合）返回并不完整。
 // 实测 sessionid / sid_tt / sid_guard / uid_tt 等能通过 cookies.get(url,name)
 // 单独读取，但不会稳定出现在 getAll(domain) 结果里。
@@ -56,7 +61,7 @@ const JIMENG_TAB_URL_PATTERNS = ['https://*.jianying.com/*'];
 // ======================== 进度广播 ========================
 async function broadcastProgress(payload) {
   try {
-    await chrome.runtime.sendMessage({ __progress: true, ...payload });
+    await extensionApi.runtime.sendMessage({ __progress: true, ...payload });
   } catch {}
 }
 
@@ -164,11 +169,11 @@ async function writeDiagnosticLog(event, payload = {}) {
       iso: new Date().toISOString(),
       event,
       payload: sanitizeDiagnosticPayload(payload),
-      version: chrome.runtime.getManifest?.().version || '',
+      version: extensionApi.runtime.getManifest?.().version || '',
     };
-    const current = (await chrome.storage.local.get(DIAGNOSTIC_LOG_KEY))[DIAGNOSTIC_LOG_KEY];
+    const current = (await extensionApi.storage.local.get(DIAGNOSTIC_LOG_KEY))[DIAGNOSTIC_LOG_KEY];
     const next = [...(Array.isArray(current) ? current : []), entry].slice(-MAX_DIAGNOSTIC_LOGS);
-    await chrome.storage.local.set({ [DIAGNOSTIC_LOG_KEY]: next });
+    await extensionApi.storage.local.set({ [DIAGNOSTIC_LOG_KEY]: next });
     console.log('[即梦切换器诊断]', event, entry.payload);
   } catch (e) {
     console.warn('[即梦切换器] 写入诊断日志失败:', e);
@@ -176,11 +181,11 @@ async function writeDiagnosticLog(event, payload = {}) {
 }
 
 async function getDiagnosticLogs() {
-  return (await chrome.storage.local.get(DIAGNOSTIC_LOG_KEY))[DIAGNOSTIC_LOG_KEY] || [];
+  return (await extensionApi.storage.local.get(DIAGNOSTIC_LOG_KEY))[DIAGNOSTIC_LOG_KEY] || [];
 }
 
 async function clearDiagnosticLogs() {
-  await chrome.storage.local.set({ [DIAGNOSTIC_LOG_KEY]: [] });
+  await extensionApi.storage.local.set({ [DIAGNOSTIC_LOG_KEY]: [] });
   return { success: true };
 }
 
@@ -246,7 +251,7 @@ async function persistPendingRestore(snapshot, stage = 'armed') {
   // 冲突检测：如果已有 pending 且非 committing 阶段 → **拒绝覆盖**
   // 原因：当前 cookie 可能是残缺/污染状态，覆盖快照会把唯一正常账号备份丢掉。
   // 让调用方先显式处理（例如等下次 SW 启动或让用户介入）。
-  const existing = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+  const existing = (await extensionApi.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
   if (existing?.cookies?.length && existing.stage !== 'committing') {
     if (isStalePendingRestore(existing)) {
       console.warn('[即梦切换器] 清理超时 pending restore，允许新操作继续');
@@ -256,7 +261,7 @@ async function persistPendingRestore(snapshot, stage = 'armed') {
     }
   }
   try {
-    await chrome.storage.local.set({
+    await extensionApi.storage.local.set({
       [PENDING_RESTORE_KEY]: {
         cookies: snapshot,
         stage,
@@ -272,17 +277,17 @@ async function persistPendingRestore(snapshot, stage = 'armed') {
 
 async function markPendingStage(stage) {
   try {
-    const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+    const r = await extensionApi.storage.local.get(PENDING_RESTORE_KEY);
     const pending = r[PENDING_RESTORE_KEY];
     if (!pending) return;
     pending.stage = stage;
     pending.ts = Date.now();
-    await chrome.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
+    await extensionApi.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
   } catch {}
 }
 
 async function clearPendingRestore() {
-  try { await chrome.storage.local.remove(PENDING_RESTORE_KEY); } catch {}
+  try { await extensionApi.storage.local.remove(PENDING_RESTORE_KEY); } catch {}
 }
 
 function hasCriticalRestoreFailure(result) {
@@ -299,7 +304,7 @@ async function tryRecoverPendingRestore() {
       // 关键：所有对 pending 的读/写都必须在 cookieLock 下，
       // 防止和 switchAccount / checkAllStatuses 的 pending 操作竞争导致误删。
       await withCookieLock(async () => {
-        const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+        const r = await extensionApi.storage.local.get(PENDING_RESTORE_KEY);
         const pending = r[PENDING_RESTORE_KEY];
         if (!pending?.cookies?.length) return;
 
@@ -329,7 +334,7 @@ async function tryRecoverPendingRestore() {
         console.warn(`[即梦切换器] 检测到上次异常终止（stage=${pending.stage}），尝试第 ${attempts} 次恢复...`);
         // 先更新 attempts 计数，即使恢复失败也不丢信息
         pending.attempts = attempts;
-        await chrome.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
+        await extensionApi.storage.local.set({ [PENDING_RESTORE_KEY]: pending });
 
         await clearDomainCookies();
         const res = await restoreCookies(pending.cookies);
@@ -354,16 +359,16 @@ async function tryRecoverPendingRestore() {
   return recoveryPromise;
 }
 
-chrome.runtime.onStartup.addListener(() => { tryRecoverPendingRestore(); });
-chrome.runtime.onInstalled.addListener(() => { tryRecoverPendingRestore(); });
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+extensionApi.runtime.onStartup.addListener(() => { tryRecoverPendingRestore(); });
+extensionApi.runtime.onInstalled.addListener(() => { tryRecoverPendingRestore(); });
+extensionApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== 'complete') return;
   if (!tab?.url || !isJimengHost(tab.url)) return;
   scheduleAutoLoginIsolation(tabId, 'tab-updated');
   scheduleAutoSaveCurrentAccount('tab-updated');
 });
 
-chrome.cookies.onChanged.addListener((info) => {
+extensionApi.cookies.onChanged.addListener((info) => {
   const cookie = info?.cookie;
   if (info?.removed) return;
   if (!cookie || !isJimengHost(cookie.domain) || !isAuthCookieName(cookie.name)) return;
@@ -379,7 +384,7 @@ async function maybeRecoverOnWakeup() {
     // 先查 pending 是否存在（便宜操作）：
     // 如果 pending 有且非 committing，**无视节流**立即尝试恢复
     // （场景：前一次恢复失败后，pending 残留，新业务必须等恢复完成再进行）
-    const r = await chrome.storage.local.get(PENDING_RESTORE_KEY);
+    const r = await extensionApi.storage.local.get(PENDING_RESTORE_KEY);
     const pending = r[PENDING_RESTORE_KEY];
     const hasActivePending = pending?.cookies?.length && pending.stage !== 'committing';
 
@@ -401,10 +406,10 @@ async function maybeRecoverOnWakeup() {
 
 async function getAllDomainCookies() {
   const [a, b, supplemental] = await Promise.all([
-    chrome.cookies.getAll({ domain: JIMENG_DOMAIN }),
-    chrome.cookies.getAll({ domain: 'jimeng.jianying.com' }),
+    extensionApi.cookies.getAll({ domain: JIMENG_DOMAIN }),
+    extensionApi.cookies.getAll({ domain: 'jimeng.jianying.com' }),
     Promise.all(SUPPLEMENTAL_COOKIE_NAMES.map(name =>
-      chrome.cookies.get({ url: 'https://jimeng.jianying.com/', name }).catch(() => null)
+      extensionApi.cookies.get({ url: 'https://jimeng.jianying.com/', name }).catch(() => null)
     )),
   ]);
   const seen = new Set();
@@ -420,14 +425,14 @@ async function clearDomainCookies() {
   const cookies = await getAllDomainCookies();
   await Promise.all(cookies.map(cookie => {
     const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
-    return chrome.cookies.remove({ url: `https://${domain}${cookie.path}`, name: cookie.name });
+    return extensionApi.cookies.remove({ url: `https://${domain}${cookie.path}`, name: cookie.name });
   }));
   const remaining = await getAllDomainCookies();
   if (remaining.length > 0) {
     for (const c of remaining) {
       const d = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain;
-      try { await chrome.cookies.remove({ url: `http://${d}${c.path}`, name: c.name }); } catch {}
-      try { await chrome.cookies.remove({ url: `https://${d}${c.path}`, name: c.name }); } catch {}
+      try { await extensionApi.cookies.remove({ url: `http://${d}${c.path}`, name: c.name }); } catch {}
+      try { await extensionApi.cookies.remove({ url: `https://${d}${c.path}`, name: c.name }); } catch {}
     }
   }
 }
@@ -472,7 +477,7 @@ async function restoreCookies(savedCookies) {
       path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
     };
     // host-only cookie 不传 domain（浏览器从 url 推断为 host-only）
-    // 否则 chrome.cookies.set 拿到 domain 会把它转为 domain cookie，作用域被放宽
+    // 否则 extensionApi.cookies.set 拿到 domain 会把它转为 domain cookie，作用域被放宽
     if (cookie.hostOnly !== true) {
       details.domain = cookie.domain;
     }
@@ -486,7 +491,7 @@ async function restoreCookies(savedCookies) {
     // v1.0~v1.2.x 曾在 auth cookie 写入失败时降级为 http+secure:false+去 sameSite 重试，
     // 这等价于把关键登录凭证暴露在明文上下文，已在 v1.3.0 移除。
     try {
-      const result = await chrome.cookies.set(details);
+      const result = await extensionApi.cookies.set(details);
       if (!result) {
         failures.push({ name: cookie.name, isAuth: AUTH_COOKIE_NAMES.has(cookie.name) });
         console.warn(`[即梦切换器] cookie 写入失败（不降级重试）: ${cookie.name}`);
@@ -510,7 +515,7 @@ async function restoreCookies(savedCookies) {
 //
 // expectedAccount: 可选，传入后做深层校验（要求 API 返回的 userId 与该账号保存的 userId 一致）
 async function verifySession(expectedAccount = null, options = {}) {
-  const sid = await chrome.cookies.get({ url: 'https://jimeng.jianying.com/', name: 'sessionid' });
+  const sid = await extensionApi.cookies.get({ url: 'https://jimeng.jianying.com/', name: 'sessionid' });
   if (!sid?.value) return false;
 
   // 无目标账号 → 浅层校验够
@@ -542,7 +547,7 @@ async function verifySession(expectedAccount = null, options = {}) {
 }
 
 async function validateRestoredAccountForSwitch(expectedAccount = null) {
-  const sid = await chrome.cookies.get({ url: 'https://jimeng.jianying.com/', name: 'sessionid' });
+  const sid = await extensionApi.cookies.get({ url: 'https://jimeng.jianying.com/', name: 'sessionid' });
   if (!sid?.value) {
     return { ok: false, reason: 'missing-sessionid', status: null };
   }
@@ -613,7 +618,7 @@ class JimengTabSession {
 
   async ensure() {
     if (this.tabId !== null) {
-      try { await chrome.tabs.get(this.tabId); return; } catch { this.tabId = null; }
+      try { await extensionApi.tabs.get(this.tabId); return; } catch { this.tabId = null; }
     }
     if (!this.forceInternal) {
       const reusable = await findReusableJimengTab();
@@ -631,7 +636,7 @@ class JimengTabSession {
     if (!this.allowCreate) {
       throw new Error('没有可复用的即梦标签页');
     }
-    const tab = await chrome.tabs.create({ url: JIMENG_HOME, active: false });
+    const tab = await extensionApi.tabs.create({ url: JIMENG_HOME, active: false });
     this.tabId = tab.id;
     this.isInternal = true;
     await this.waitForComplete();
@@ -641,7 +646,7 @@ class JimengTabSession {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       try {
-        const tab = await chrome.tabs.get(this.tabId);
+        const tab = await extensionApi.tabs.get(this.tabId);
         if (tab.status === 'complete') {
           await new Promise(r => setTimeout(r, TAB_INIT_GRACE_MS));
           return;
@@ -654,14 +659,14 @@ class JimengTabSession {
 
   async reload() {
     if (this.tabId === null) throw new Error('Tab 未初始化');
-    await chrome.tabs.reload(this.tabId, { bypassCache: true });
+    await extensionApi.tabs.reload(this.tabId, { bypassCache: true });
     await new Promise(r => setTimeout(r, 300));
     await this.waitForComplete();
   }
 
   async fetch(path, body = {}, method = 'POST') {
     if (this.tabId === null) throw new Error('Tab 未初始化');
-    const results = await chrome.scripting.executeScript({
+    const results = await extensionApi.scripting.executeScript({
       target: { tabId: this.tabId },
       world: 'MAIN',
       args: [path, body, method],
@@ -686,7 +691,7 @@ class JimengTabSession {
 
   async cleanup() {
     if (this.isInternal && this.tabId !== null) {
-      try { await chrome.tabs.remove(this.tabId); } catch {}
+      try { await extensionApi.tabs.remove(this.tabId); } catch {}
     }
     this.tabId = null;
     this.isInternal = false;
@@ -713,7 +718,7 @@ async function fetchJimengApiDirect(path, body = {}, method = 'POST') {
 }
 
 async function findReusableJimengTab() {
-  const tabs = await chrome.tabs.query({ url: JIMENG_TAB_URL_PATTERNS });
+  const tabs = await extensionApi.tabs.query({ url: JIMENG_TAB_URL_PATTERNS });
   if (!tabs.length) return null;
 
   return tabs.find(tab => tab.active && tab.status === 'complete')
@@ -1095,7 +1100,7 @@ function parseMemberPanelSnapshot(snapshot = {}) {
 async function readAppServiceDetailedStatus(tabId, { timeoutMs = 7000 } = {}) {
   if (tabId == null) return { credits: null, vip: null };
 
-  const results = await chrome.scripting.executeScript({
+  const results = await extensionApi.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
     args: [timeoutMs],
@@ -1172,7 +1177,7 @@ async function readAppServiceDetailedStatus(tabId, { timeoutMs = 7000 } = {}) {
 async function readDetailedMemberPanelStatus(tabId, { timeoutMs = 7000 } = {}) {
   if (tabId == null) return { credits: null, vip: null };
 
-  const results = await chrome.scripting.executeScript({
+  const results = await extensionApi.scripting.executeScript({
     target: { tabId },
     world: 'MAIN',
     args: [timeoutMs],
@@ -1368,12 +1373,23 @@ async function readDisplayedAccountStatus(tabId, { retries = 4, delayMs = 800 } 
   if (tabId == null) return { credits: null, vip: null };
 
   const readOnce = async () => {
-    const results = await chrome.scripting.executeScript({
+    const results = await extensionApi.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
-      args: [parseCompactDisplayedNumber.toString()],
-      func: (parseCompactDisplayedNumberSource) => {
-        const parseCompactDisplayedNumber = eval(`(${parseCompactDisplayedNumberSource})`);
+      func: () => {
+        const parseCompactDisplayedNumber = (text) => {
+          const raw = String(text || '').trim().toLowerCase();
+          if (!raw) return null;
+          const normalized = raw.replace(/,/g, '').replace(/\s+/g, '');
+          const match = normalized.match(/(\d+(?:\.\d+)?)/);
+          if (!match) return null;
+          const value = Number(match[1]);
+          if (!Number.isFinite(value)) return null;
+          if (normalized.includes('万')) return Math.round(value * 10000);
+          if (normalized.includes('千') || normalized.endsWith('k')) return Math.round(value * 1000);
+          if (normalized.includes('亿')) return Math.round(value * 100000000);
+          return Math.round(value);
+        };
         const textOf = (selectors) => {
           for (const selector of selectors) {
             const el = document.querySelector(selector);
@@ -1656,7 +1672,7 @@ function findDuplicateImportedIdentity(accounts) {
 }
 
 async function loadAccounts({ allowRecovery = true } = {}) {
-  const r = await chrome.storage.local.get([STORAGE_KEY, STORAGE_BACKUP_KEY, STORAGE_JOURNAL_KEY]);
+  const r = await extensionApi.storage.local.get([STORAGE_KEY, STORAGE_BACKUP_KEY, STORAGE_JOURNAL_KEY]);
   if (Array.isArray(r[STORAGE_KEY])) {
     const normalized = normalizeAccountList(r[STORAGE_KEY]);
     if (normalized.changed) {
@@ -1668,7 +1684,7 @@ async function loadAccounts({ allowRecovery = true } = {}) {
 
   if (allowRecovery && Array.isArray(r[STORAGE_BACKUP_KEY])) {
     const normalized = normalizeAccountList(r[STORAGE_BACKUP_KEY]);
-    await chrome.storage.local.set({ [STORAGE_KEY]: normalized.accounts });
+    await extensionApi.storage.local.set({ [STORAGE_KEY]: normalized.accounts });
     return normalized.accounts;
   }
 
@@ -1676,7 +1692,7 @@ async function loadAccounts({ allowRecovery = true } = {}) {
     const last = [...r[STORAGE_JOURNAL_KEY]].reverse().find(entry => Array.isArray(entry?.accounts));
     if (last) {
       const normalized = normalizeAccountList(last.accounts);
-      await chrome.storage.local.set({
+      await extensionApi.storage.local.set({
         [STORAGE_KEY]: normalized.accounts,
         [STORAGE_BACKUP_KEY]: normalized.accounts,
       });
@@ -1693,7 +1709,7 @@ async function saveAccountsToStorage(accounts, reason = 'update') {
   const effectiveReason = normalized.changed && !String(reason).includes('normalize')
     ? `${reason}+normalize`
     : reason;
-  const before = await chrome.storage.local.get([STORAGE_KEY, STORAGE_BACKUP_KEY, STORAGE_JOURNAL_KEY]);
+  const before = await extensionApi.storage.local.get([STORAGE_KEY, STORAGE_BACKUP_KEY, STORAGE_JOURNAL_KEY]);
   const previous = Array.isArray(before[STORAGE_KEY])
     ? before[STORAGE_KEY]
     : (Array.isArray(before[STORAGE_BACKUP_KEY]) ? before[STORAGE_BACKUP_KEY] : []);
@@ -1705,17 +1721,17 @@ async function saveAccountsToStorage(accounts, reason = 'update') {
     accounts: snapshot,
   }].slice(-MAX_ACCOUNTS_JOURNAL);
 
-  await chrome.storage.local.set({
+  await extensionApi.storage.local.set({
     [STORAGE_KEY]: snapshot,
     [STORAGE_BACKUP_KEY]: snapshot,
     [STORAGE_JOURNAL_KEY]: nextJournal,
   });
 
-  const verify = (await chrome.storage.local.get(STORAGE_KEY))[STORAGE_KEY];
+  const verify = (await extensionApi.storage.local.get(STORAGE_KEY))[STORAGE_KEY];
   const expectedSig = buildAccountsSignature(snapshot);
   const actualSig = Array.isArray(verify) ? buildAccountsSignature(verify) : null;
   if (!actualSig || expectedSig != actualSig) {
-    await chrome.storage.local.set({
+    await extensionApi.storage.local.set({
       [STORAGE_KEY]: previous,
       [STORAGE_BACKUP_KEY]: previous,
     });
@@ -1726,19 +1742,19 @@ async function saveAccountsToStorage(accounts, reason = 'update') {
 }
 
 async function loadSettings() {
-  const r = await chrome.storage.local.get(SETTINGS_KEY);
+  const r = await extensionApi.storage.local.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(r[SETTINGS_KEY] || {}) };
 }
 
 async function saveSettings(patch) {
   const cur = await loadSettings();
-  await chrome.storage.local.set({ [SETTINGS_KEY]: { ...DEFAULT_SETTINGS, ...cur, ...patch } });
+  await extensionApi.storage.local.set({ [SETTINGS_KEY]: { ...DEFAULT_SETTINGS, ...cur, ...patch } });
 }
 
 
 async function getRuntimeDiagnostics() {
-  const manifest = chrome.runtime.getManifest?.() || {};
-  const pending = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY] || null;
+  const manifest = extensionApi.runtime.getManifest?.() || {};
+  const pending = (await extensionApi.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY] || null;
   return {
     version: manifest.version || '',
     serviceWorkerStartedAt: SERVICE_WORKER_STARTED_AT,
@@ -1998,14 +2014,14 @@ async function prepareLoggedOutLoginInCurrentLock(tabId, reason = 'unknown', opt
     return { skipped: true, reason: 'recently-isolated' };
   }
 
-  const pending = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+  const pending = (await extensionApi.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
   if (pending?.cookies?.length && pending.stage !== 'committing') {
     return { skipped: true, reason: 'pending-restore-active' };
   }
 
   let tab;
   try {
-    tab = await chrome.tabs.get(tabId);
+    tab = await extensionApi.tabs.get(tabId);
   } catch {
     return { skipped: true, reason: 'tab-closed' };
   }
@@ -2035,7 +2051,7 @@ async function prepareLoggedOutLoginInCurrentLock(tabId, reason = 'unknown', opt
     lastLoginIsolationAt: Date.now(),
     lastLoginIsolationReason: reason,
   });
-  await chrome.tabs.reload(tabId, { bypassCache: true });
+  await extensionApi.tabs.reload(tabId, { bypassCache: true });
 
   await writeDiagnosticLog('login-isolation:auto-success', {
     diagSessionId,
@@ -2115,7 +2131,7 @@ async function saveCurrentAccount(customName, repairAccountId = null, options = 
 
   // 恢复屏障：如果有未完成的 pending restore（上次异常终止），saveCurrentAccount 也必须拒绝。
   // 否则当前 cookie 可能是脏/半恢复状态，保存会把错误凭证固化进 storage。
-  const existingPending = (await chrome.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
+  const existingPending = (await extensionApi.storage.local.get(PENDING_RESTORE_KEY))[PENDING_RESTORE_KEY];
   if (existingPending?.cookies?.length && existingPending.stage !== 'committing') {
     if (isStalePendingRestore(existingPending)) {
       console.warn('[即梦切换器] 保存账号前清理超时 pending restore');
@@ -2348,7 +2364,7 @@ async function saveCurrentAccount(customName, repairAccountId = null, options = 
 
 async function clearJimengLocalStorage(tabId) {
   try {
-    const results = await chrome.scripting.executeScript({
+    const results = await extensionApi.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: async () => {
@@ -2436,7 +2452,7 @@ async function clearJimengLocalStorage(tabId) {
 
 async function clearJimengLoginIsolationState(tabId) {
   try {
-    const results = await chrome.scripting.executeScript({
+    const results = await extensionApi.scripting.executeScript({
       target: { tabId },
       world: 'MAIN',
       func: async () => {
@@ -2515,7 +2531,7 @@ async function clearJimengLoginIsolationState(tabId) {
 async function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const tab = await chrome.tabs.get(tabId);
+    const tab = await extensionApi.tabs.get(tabId);
     if (tab?.status === 'complete') {
       await new Promise(r => setTimeout(r, TAB_INIT_GRACE_MS));
       return tab;
@@ -2539,15 +2555,15 @@ async function prepareIsolatedLogin() {
   let tab = await findReusableJimengTab().catch(() => null);
   let created = false;
   if (!tab?.id) {
-    tab = await chrome.tabs.create({ url: JIMENG_HOME, active: true });
+    tab = await extensionApi.tabs.create({ url: JIMENG_HOME, active: true });
     created = true;
   } else {
-    tab = await chrome.tabs.update(tab.id, { active: true });
+    tab = await extensionApi.tabs.update(tab.id, { active: true });
   }
 
   await waitForTabComplete(tab.id);
   const siteState = await clearJimengLoginIsolationState(tab.id);
-  await chrome.tabs.reload(tab.id, { bypassCache: true });
+  await extensionApi.tabs.reload(tab.id, { bypassCache: true });
   await waitForTabComplete(tab.id);
 
   suppressAutomaticLoginWork(20000, 'manual-login-isolation');
@@ -2768,7 +2784,7 @@ async function switchAccount(accountId) {
 
 // 多窗口安全的 reload：每个窗口只 reload 该窗口的 active tab，其他 tab 注入非阻塞 toast
 async function reloadJimengTabsForSwitch(accountName, options = {}) {
-  const tabs = await chrome.tabs.query({ url: '*://*.jianying.com/*' });
+  const tabs = await extensionApi.tabs.query({ url: '*://*.jianying.com/*' });
   const skipTabIds = new Set((options.skipTabIds || [])
     .filter(tabId => tabId !== null && tabId !== undefined)
     .map(tabId => Number(tabId)));
@@ -2787,7 +2803,7 @@ async function reloadJimengTabsForSwitch(accountName, options = {}) {
     }
     try {
       await clearJimengLocalStorage(tab.id);
-      await chrome.tabs.reload(tab.id, { bypassCache: true });
+      await extensionApi.tabs.reload(tab.id, { bypassCache: true });
       result.reloadedTabIds.push(tab.id);
     } catch {
       await notifyTabAccountSwitched(tab.id, accountName);
@@ -2801,7 +2817,7 @@ async function reloadJimengTabsForSwitch(accountName, options = {}) {
 // 用 Shadow DOM 隔离避免被页面全局 CSS（特别是 reset.css 或 !important 规则）污染
 async function notifyTabAccountSwitched(tabId, newAccountName) {
   try {
-    await chrome.scripting.executeScript({
+    await extensionApi.scripting.executeScript({
       target: { tabId },
       args: [newAccountName],
       func: (name) => {
@@ -3234,7 +3250,7 @@ const SENSITIVE_ACTIONS = new Set([
   'deleteAccount', 'renameAccount', 'importAccounts',
 ]);
 
-chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+extensionApi.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = async () => {
     // 敏感操作前必须 await 恢复完成，避免新业务在脏 cookie 状态上开始
     // 非敏感操作（getAccounts/getSettings/detectCurrent）也调但不阻塞太久（节流 30s）

@@ -1,6 +1,6 @@
 {
   "name": "jimeng-account-switcher",
-  "version": "1.6.25",
+  "version": "1.6.26",
   "description": "即梦账号切换器：Playwright 扩展回归测试",
   "main": "background.js",
   "scripts": {

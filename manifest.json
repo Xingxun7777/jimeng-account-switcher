@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "即梦账号切换器",
-  "version": "1.6.25",
+  "version": "1.6.26",
   "description": "即梦多账号快速切换、积分/VIP 状态查看、Session 过期告警、账号导入导出",
   "permissions": [
     "cookies",
@@ -19,7 +19,10 @@
     "128": "icons/icon128.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "scripts": [
+      "background.js"
+    ]
   },
   "action": {
     "default_popup": "popup/popup.html",
@@ -33,7 +36,17 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "jimeng-account-switcher@xingxun.local",
-      "strict_min_version": "128.0"
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [
+          "none"
+        ],
+        "optional": []
+      }
+    },
+    "gecko_android": {
+      "strict_min_version": "142.0"
     }
-  }
+  },
+  "minimum_chrome_version": "102"
 }
