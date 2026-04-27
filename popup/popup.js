@@ -355,6 +355,8 @@ $btnSave.addEventListener('click', async () => {
   });
   if (res?.success) {
     if (customName) {
+      clearTimeout(saveDraftTimer);
+      saveDraftTimer = null;
       $inputSaveName.value = '';
       await sendMsg({ action: 'saveSettings', patch: { saveDraftName: '' } });
     }
